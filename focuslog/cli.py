@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 from datetime import date, datetime, time as dtime
@@ -8,6 +8,7 @@ import sys
 from .clock import RealClock
 from .db import FocusLogDB, default_db_path, normalize_tags
 from .exporting import export_sessions_csv
+from .desktop import launch_desktop
 from .gui import launch_gui
 from .notifier import Notifier
 from .reporting import build_stats, format_duration, generate_weekly_report
@@ -222,4 +223,8 @@ def _handle_export(args: argparse.Namespace, db: FocusLogDB) -> int:
 
 
 def _handle_gui(args: argparse.Namespace) -> int:
+    result = launch_desktop(Path(args.db))
+    if result == 0:
+        return 0
+    print("回退到 Tk GUI...")
     return launch_gui(Path(args.db))

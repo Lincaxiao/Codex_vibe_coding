@@ -1,4 +1,4 @@
-﻿# FocusLog
+# FocusLog
 
 FocusLog 是一个离线优先的番茄钟程序，支持命令行与图形界面两种使用方式，包含本地日志、统计、周报和 CSV 导出。
 
@@ -63,6 +63,30 @@ python -m focuslog export
 ```
 
 默认输出到：`focuslog/out/focuslog.csv`
+
+
+## GUI 现代化升级计划（React + FastAPI + PyWebView）
+
+已新增 FocusLog 的完整重构方案文档，路线与 Prompt Vault 保持一致：
+
+- 一步到位替换 Tk GUI
+- React + TypeScript + Vite 前端
+- FastAPI 本地 API
+- PyWebView 桌面壳（Windows/macOS）
+- 保持现有 SQLite 与 CLI 行为不变
+
+详见：`focuslog/UPGRADE_PLAN.md`
+
+
+### 第一阶段已落地（可运行骨架）
+
+当前仓库已提供首批实现：
+
+- `focuslog/api/`：FastAPI 路由（health/meta/sessions/stats/report/export/timer，含 `timer/stream` SSE）。
+- `focuslog/desktop/`：PyWebView + Uvicorn 桌面入口。
+- `python -m focuslog gui --db <path>`：优先尝试新桌面壳并复用指定数据库；依赖缺失时自动回退 Tk GUI。
+
+> 若要体验新桌面壳，请先安装：`pip install fastapi uvicorn pywebview`
 
 ## 程序化交付（可执行文件）
 
