@@ -1,19 +1,71 @@
 # Prompt Vault
 
-Prompt Vault 是一个本地优先（local-first）的提示词管理工具，提供 Python 库与命令行接口，便于你每天离线维护、检索、渲染和导入导出提示词。
+Prompt Vault 是一个本地优先（local-first）的提示词管理器，核心数据存储在 SQLite。当前版本提供：
 
-## 为什么有用
+- Python CLI（稳定）
+- 现代化桌面 GUI（React + FastAPI + PyWebView）
+- Windows/macOS 构建脚本
 
-- 所有数据保存在本地 SQLite，离线可用。
-- 支持标题/正文/标签搜索。
-- 支持 `{{placeholder}}` 模板渲染。
-- 支持软删除，避免误删即丢。
-- 支持 JSON / Markdown 导出与 JSON 导入去重。
-- 支持桌面 GUI（Tkinter）与可打包为 Windows 程序（EXE）。
+## 技术栈
 
-## 快速开始（零安装）
+- 后端：`FastAPI + Pydantic`
+- 桌面壳：`PyWebView`
+- 前端：`React + TypeScript + Vite + Tailwind CSS`
+- 数据：`SQLite`（复用现有 `PromptDB`）
 
-在仓库根目录执行：
+## 目录结构
+
+```text
+prompt_vault/
+  prompt_vault/
+    db.py
+    service.py
+    api.py
+    schemas.py
+    webapp.py
+    gui.py            # 新 GUI 入口（WebView）
+    legacy_gui.py     # 旧 Tk GUI（仅回滚）
+  frontend/
+    src/
+    package.json
+  scripts/
+    run_gui.bat
+    build_web.bat
+    build_desktop_win.bat
+    build_desktop_mac.sh
+  app_entry.py
+```
+
+## 依赖安装
+
+Python（GUI 依赖，推荐使用 `VibeCoding` conda 环境）：
+
+```bash
+prompt_vault/scripts/install_gui_deps.bat
+```
+
+手动安装等价命令：
+
+```bash
+conda run -n VibeCoding python -m pip install --upgrade pip setuptools wheel
+conda run -n VibeCoding python -m pip install --use-pep517 --no-warn-script-location -r prompt_vault/requirements-gui.txt
+```
+
+前端依赖：
+
+```bash
+npm --prefix prompt_vault/frontend install
+```
+
+说明：
+
+- `proxy_tools` 的构建告警来自上游包历史构建方式，通常不影响运行；本项目安装命令已启用 `--use-pep517` 以减少该类告警。
+- `bottle.exe` / `fastapi.exe` 的 PATH 告警不影响 `python -m prompt_vault` 的运行。
+- `whatwg-encoding` 的 deprecate 提示来自前端测试链路（`jsdom` 的传递依赖），不影响生产 GUI 打包与运行。
+
+## 快速开始
+
+### CLI
 
 ```bash
 python -m prompt_vault init
@@ -21,137 +73,98 @@ python -m prompt_vault add --title "日报总结" --body "请总结 {{date}} 的
 python -m prompt_vault list
 ```
 
-## GUI 启动（推荐）
-
-在仓库根目录执行：
+### GUI（推荐）
 
 ```bash
 python -m prompt_vault gui
 ```
 
-或直接运行：
+Windows 也可：
 
 ```bash
 prompt_vault/scripts/run_gui.bat
 ```
 
-## 常用命令示例
+说明：
 
-### add
+- Windows 下 GUI 强制使用 `Edge WebView2` 内核（避免旧内核导致布局退化/字体发糊）。
+- 若系统未安装 WebView2 Runtime，请先安装后再启动。
+- `run_gui.bat` 默认会重建前端资源；如需跳过可设置 `PROMPT_VAULT_SKIP_WEB_BUILD=1`。
+- `build_web.bat` 默认复用 `frontend/node_modules`；如需强制重装可设置 `PROMPT_VAULT_NPM_INSTALL=1`。
 
-```bash
-python -m prompt_vault add --title "代码审查" --body "请用要点审查以下代码：{{code}}"
-```
-
-### list
-
-```bash
-python -m prompt_vault list
-python -m prompt_vault list --all
-```
-
-### show
+### 前端开发模式（可选）
 
 ```bash
-python -m prompt_vault show 1
+npm --prefix prompt_vault/frontend run dev
 ```
 
-### search
+然后在另一个终端：
 
 ```bash
-python -m prompt_vault search 审查
-python -m prompt_vault search python
+set PROMPT_VAULT_DEV_URL=http://127.0.0.1:5173
+python -m prompt_vault gui
 ```
 
-### edit
+## GUI 构建与打包
+
+### 构建前端静态资源
 
 ```bash
-python -m prompt_vault edit 1 --title "代码审查助手"
-python -m prompt_vault edit 1 --body "请从可读性、性能、安全性审查：{{code}}"
+prompt_vault/scripts/build_web.bat
 ```
 
-### delete（软删除）
+### Windows 打包
 
 ```bash
-python -m prompt_vault delete 1
+prompt_vault/scripts/build_desktop_win.bat
 ```
 
-### tag
-
-```bash
-python -m prompt_vault tag 1 --add python --add review
-python -m prompt_vault tag 1 --remove review
-```
-
-### render
-
-```bash
-python -m prompt_vault render 1 --var code='print("hi")'
-python -m prompt_vault render 1 --vars-json prompt_vault/examples/vars.json
-```
-
-### clip
-
-```bash
-python -m prompt_vault clip 1
-python -m prompt_vault clip 1 --var code='print("hi")'
-```
-
-### export
-
-```bash
-python -m prompt_vault export --format json --output prompt_vault/exports/prompts.json
-python -m prompt_vault export --format markdown --output prompt_vault/exports/prompts.md
-```
-
-### import
-
-```bash
-python -m prompt_vault import --input prompt_vault/exports/prompts.json
-```
-
-## 数据位置与安全说明
-
-- 默认数据库位置：`prompt_vault/data/prompt_vault.sqlite`
-- 你也可以通过 `--db` 指定其他数据库文件。
-- 软删除仅标记 `is_deleted=1`，不会物理删除数据。
-- 工具不包含破坏性批量清理操作。
-- 所有读写都限制在本地文件系统，不依赖远程网络服务。
-
-## 运行测试
-
-从仓库根目录执行：
-
-```bash
-bash prompt_vault/scripts/test.sh
-```
-
-在 Windows 下也可直接执行：
-
-```bash
-python -m unittest discover -s prompt_vault/tests -v
-```
-
-## 打包为程序（Windows EXE）
-
-安装 `pyinstaller` 后执行：
+兼容旧命令：
 
 ```bash
 prompt_vault/scripts/build_exe.bat
 ```
 
-输出目录：`prompt_vault/dist/PromptVault/`
+### macOS 打包
 
-## 作为库使用
-
-```python
-from pathlib import Path
-from prompt_vault.db import PromptDB
-from prompt_vault.service import render_template
-
-db = PromptDB(Path("prompt_vault/data/prompt_vault.sqlite"))
-db.init()
-prompt_id = db.add_prompt("问候", "你好 {{name}}")
-record = db.get_prompt(prompt_id)
-print(render_template(record.body, {"name": "世界"}))
+```bash
+bash prompt_vault/scripts/build_desktop_mac.sh
 ```
+
+## API 概览（本地）
+
+- `GET /api/health`
+- `GET /api/prompts`
+- `GET /api/prompts/{id}`
+- `POST /api/prompts`
+- `PUT /api/prompts/{id}`
+- `DELETE /api/prompts/{id}`
+- `POST /api/prompts/{id}/render`
+- `POST /api/prompts/{id}/copy`
+- `POST /api/import`
+- `POST /api/export`
+
+## 常用 CLI 命令
+
+```bash
+python -m prompt_vault search 审查
+python -m prompt_vault edit 1 --title "代码审查助手"
+python -m prompt_vault render 1 --var code='print("hi")'
+python -m prompt_vault export --format json --output prompt_vault/exports/prompts.json
+python -m prompt_vault import --input prompt_vault/exports/prompts.json
+```
+
+## 数据位置与安全说明
+
+- 默认数据库：`prompt_vault/data/prompt_vault.sqlite`
+- 可通过 `--db` 指定其他路径
+- 软删除为 `is_deleted=1`，不做物理删除
+- 全部读写在本地文件系统内完成
+
+## 测试
+
+```bash
+python -m unittest discover -s prompt_vault/tests -v
+```
+
+如果当前环境禁止 SQLite 写盘，测试会自动 skip，不会误报失败。

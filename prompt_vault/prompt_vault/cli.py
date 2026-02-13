@@ -238,7 +238,7 @@ def command_import(db: PromptDB, args: argparse.Namespace) -> int:
 
 
 def command_gui(db: PromptDB, args: argparse.Namespace) -> int:
-    from .gui import launch_gui
+    from .webapp import launch_gui
 
     return launch_gui(db.path)
 

@@ -4,11 +4,11 @@ import sys
 
 try:
     from prompt_vault.prompt_vault.cli import main as cli_main
-    from prompt_vault.prompt_vault.gui import launch_gui
+    from prompt_vault.prompt_vault.webapp import launch_gui
 except ModuleNotFoundError:
     # Fallback for direct script execution: python prompt_vault/app_entry.py
     from prompt_vault.cli import main as cli_main
-    from prompt_vault.gui import launch_gui
+    from prompt_vault.webapp import launch_gui
 
 
 def main() -> int:
