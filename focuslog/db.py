@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -181,6 +181,15 @@ class FocusLogDB:
             "ORDER BY start_time ASC"
         )
         return self._read_sessions(query, [_to_utc_text(start), _to_utc_text(end)])
+
+
+    def get_session(self, session_id: int) -> StoredSession | None:
+        query = (
+            "SELECT id, start_time, end_time, duration_sec, task, tags, kind, completed, interrupted_reason "
+            "FROM sessions WHERE id = ? LIMIT 1"
+        )
+        rows = self._read_sessions(query, [int(session_id)])
+        return rows[0] if rows else None
 
     def list_all_sessions(self) -> list[StoredSession]:
         query = (
