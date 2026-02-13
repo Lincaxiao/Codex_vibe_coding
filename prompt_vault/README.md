@@ -9,6 +9,7 @@ Prompt Vault 是一个本地优先（local-first）的提示词管理工具，�
 - 支持 `{{placeholder}}` 模板渲染。
 - 支持软删除，避免误删即丢。
 - 支持 JSON / Markdown 导出与 JSON 导入去重。
+- 支持桌面 GUI（Tkinter）与可打包为 Windows 程序（EXE）。
 
 ## 快速开始（零安装）
 
@@ -18,6 +19,20 @@ Prompt Vault 是一个本地优先（local-first）的提示词管理工具，�
 python -m prompt_vault init
 python -m prompt_vault add --title "日报总结" --body "请总结 {{date}} 的工作进展"
 python -m prompt_vault list
+```
+
+## GUI 启动（推荐）
+
+在仓库根目录执行：
+
+```bash
+python -m prompt_vault gui
+```
+
+或直接运行：
+
+```bash
+prompt_vault/scripts/run_gui.bat
 ```
 
 ## 常用命令示例
@@ -110,6 +125,22 @@ python -m prompt_vault import --input prompt_vault/exports/prompts.json
 ```bash
 bash prompt_vault/scripts/test.sh
 ```
+
+在 Windows 下也可直接执行：
+
+```bash
+python -m unittest discover -s prompt_vault/tests -v
+```
+
+## 打包为程序（Windows EXE）
+
+安装 `pyinstaller` 后执行：
+
+```bash
+prompt_vault/scripts/build_exe.bat
+```
+
+输出目录：`prompt_vault/dist/PromptVault/`
 
 ## 作为库使用
 

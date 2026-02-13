@@ -70,6 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_clip.add_argument("--var", action="append", default=[])
     p_clip.add_argument("--vars-json")
 
+    sub.add_parser("gui", help="启动图形界面")
+
     return parser
 
 
@@ -88,7 +90,7 @@ def command_init(db: PromptDB, args: argparse.Namespace) -> int:
 def command_add(db: PromptDB, args: argparse.Namespace) -> int:
     db.init()
     try:
-        prompt_id = db.add_prompt(title=args.title.strip(), body=args.body)
+        prompt_id = db.add_prompt(title=args.title, body=args.body)
     except ValueError as err:
         print(str(err), file=sys.stderr)
         return 1
@@ -235,6 +237,12 @@ def command_import(db: PromptDB, args: argparse.Namespace) -> int:
     return 0
 
 
+def command_gui(db: PromptDB, args: argparse.Namespace) -> int:
+    from .gui import launch_gui
+
+    return launch_gui(db.path)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -253,5 +261,6 @@ def main(argv: list[str] | None = None) -> int:
         "import": command_import,
         "render": command_render,
         "clip": command_clip,
+        "gui": command_gui,
     }
     return dispatch[args.command](db, args)

@@ -21,6 +21,31 @@ def compute_hash(title: str, body: str) -> str:
     return hashlib.sha256(f"{title}\n{body}".encode("utf-8")).hexdigest()
 
 
+def normalize_title(title: str) -> str:
+    value = title.strip()
+    if not value:
+        raise ValueError("标题不能为空")
+    return value
+
+
+def normalize_body(body: str) -> str:
+    if not body.strip():
+        raise ValueError("正文不能为空")
+    return body
+
+
+def normalize_tags(tags: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in tags:
+        value = str(raw).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
 def tokenize(text: str) -> list[str]:
     clean = []
     current = []
@@ -94,9 +119,11 @@ class PromptDB:
             )
 
     def add_prompt(self, title: str, body: str, created_at: str | None = None) -> int:
+        normalized_title = normalize_title(title)
+        normalized_body = normalize_body(body)
         ts = now_iso()
         created = created_at or ts
-        content_hash = compute_hash(title, body)
+        content_hash = compute_hash(normalized_title, normalized_body)
         with self.connect() as conn:
             try:
                 cur = conn.execute(
@@ -104,7 +131,7 @@ class PromptDB:
                     INSERT INTO prompts(title, body, content_hash, created_at, updated_at, is_deleted)
                     VALUES (?, ?, ?, ?, ?, 0)
                     """,
-                    (title, body, content_hash, created, ts),
+                    (normalized_title, normalized_body, content_hash, created, ts),
                 )
             except IntegrityError as exc:
                 raise ValueError("已存在相同标题与正文的提示词") from exc
@@ -134,8 +161,8 @@ class PromptDB:
         existing = self.get_prompt(prompt_id)
         if not existing:
             return False
-        new_title = title if title is not None else existing.title
-        new_body = body if body is not None else existing.body
+        new_title = normalize_title(title) if title is not None else existing.title
+        new_body = normalize_body(body) if body is not None else existing.body
         with self.connect() as conn:
             try:
                 conn.execute(
@@ -165,8 +192,11 @@ class PromptDB:
         return int(row["id"])
 
     def set_tags(self, prompt_id: int, tags: Iterable[str]) -> None:
+        clean_tags = normalize_tags(tags)
+        if not clean_tags:
+            return
         with self.connect() as conn:
-            for tag in tags:
+            for tag in clean_tags:
                 conn.execute("INSERT OR IGNORE INTO tags(name) VALUES (?)", (tag,))
                 tag_id = conn.execute("SELECT id FROM tags WHERE name = ?", (tag,)).fetchone()["id"]
                 conn.execute(
@@ -175,8 +205,11 @@ class PromptDB:
                 )
 
     def remove_tags(self, prompt_id: int, tags: Iterable[str]) -> None:
+        clean_tags = normalize_tags(tags)
+        if not clean_tags:
+            return
         with self.connect() as conn:
-            for tag in tags:
+            for tag in clean_tags:
                 row = conn.execute("SELECT id FROM tags WHERE name = ?", (tag,)).fetchone()
                 if row:
                     conn.execute(

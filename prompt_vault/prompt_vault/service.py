@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -119,19 +120,55 @@ def import_json(db: PromptDB, input_path: Path) -> tuple[int, int]:
 
 
 def copy_to_clipboard(text: str) -> bool:
-    commands = [
-        ["pbcopy"],
-        ["wl-copy"],
-        ["xclip", "-selection", "clipboard"],
+    if _copy_with_tkinter(text):
+        return True
+
+    commands: list[tuple[list[str], bool]] = [
+        (["pbcopy"], False),
+        (["wl-copy"], False),
+        (["xclip", "-selection", "clipboard"], False),
+        (["clip"], True),
     ]
     for cmd in commands:
-        if shutil.which(cmd[0]):
+        args, as_text = cmd
+        if shutil.which(args[0]):
             try:
-                subprocess.run(cmd, input=text.encode("utf-8"), check=True)
+                if as_text:
+                    subprocess.run(args, input=text, text=True, check=True)
+                else:
+                    subprocess.run(args, input=text.encode("utf-8"), check=True)
                 return True
             except Exception:
                 continue
     return False
+
+
+def _copy_with_tkinter(text: str) -> bool:
+    # Tkinter clipboard supports Unicode and avoids shell quoting issues.
+    try:
+        import tkinter as tk
+    except Exception:
+        return False
+
+    if os.environ.get("DISPLAY", "") == "" and os.name != "nt":
+        return False
+
+    root = None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.clipboard_clear()
+        root.clipboard_append(text)
+        root.update()
+        return True
+    except Exception:
+        return False
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 def format_prompt(rec: PromptRecord, tags: list[str]) -> str:

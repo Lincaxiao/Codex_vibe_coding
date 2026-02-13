@@ -1,28 +1,57 @@
 from __future__ import annotations
 
+import io
 import json
-import subprocess
-import sys
-import tempfile
+import sqlite3
+import shutil
 import unittest
+import uuid
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import dataclass
 from pathlib import Path
+
+from prompt_vault.prompt_vault.cli import main as cli_main
+
+
+@dataclass
+class CLIResult:
+    returncode: int
+    stdout: str
+    stderr: str
 
 
 class PromptVaultCLITest(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.base = Path(self.tmp.name)
+        root_tmp = Path(__file__).resolve().parents[2] / "prompt_vault" / ".tmp_test"
+        root_tmp.mkdir(parents=True, exist_ok=True)
+        self.base = root_tmp / f"case_{uuid.uuid4().hex}"
+        self.base.mkdir(parents=True, exist_ok=False)
         self.db = self.base / "data" / "prompt_vault.sqlite"
+        self._ensure_sqlite_usable()
 
     def tearDown(self) -> None:
-        self.tmp.cleanup()
+        shutil.rmtree(self.base, ignore_errors=True)
 
-    def run_cli(self, *args: str, expect: int = 0) -> subprocess.CompletedProcess[str]:
-        cmd = [sys.executable, "-m", "prompt_vault", "--db", str(self.db), *args]
-        proc = subprocess.run(cmd, text=True, capture_output=True, cwd=Path(__file__).resolve().parents[2])
-        if proc.returncode != expect:
-            raise AssertionError(f"命令失败: {' '.join(cmd)}\nstdout={proc.stdout}\nstderr={proc.stderr}")
-        return proc
+    def _ensure_sqlite_usable(self) -> None:
+        probe_path = self.base / "probe.sqlite"
+        try:
+            conn = sqlite3.connect(probe_path)
+            conn.execute("CREATE TABLE IF NOT EXISTS t (x INTEGER)")
+            conn.commit()
+            conn.close()
+        except sqlite3.Error as exc:
+            self.skipTest(f"当前环境不可用 SQLite 文件写入: {exc}")
+
+    def run_cli(self, *args: str, expect: int = 0, db: Path | None = None) -> CLIResult:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        db_path = db or self.db
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            returncode = cli_main(["--db", str(db_path), *args])
+        result = CLIResult(returncode=returncode, stdout=stdout.getvalue(), stderr=stderr.getvalue())
+        if result.returncode != expect:
+            raise AssertionError(f"命令失败: {' '.join(args)}\nstdout={result.stdout}\nstderr={result.stderr}")
+        return result
 
     def test_db_creation(self) -> None:
         self.assertFalse(self.db.exists())
@@ -71,21 +100,8 @@ class PromptVaultCLITest(unittest.TestCase):
         self.assertTrue(export_path.exists())
 
         second_db = self.base / "data" / "second.sqlite"
-        cmd = [
-            sys.executable,
-            "-m",
-            "prompt_vault",
-            "--db",
-            str(second_db),
-            "import",
-            "--input",
-            str(export_path),
-        ]
-        proc = subprocess.run(cmd, text=True, capture_output=True, cwd=Path(__file__).resolve().parents[2])
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-
-        list_cmd = [sys.executable, "-m", "prompt_vault", "--db", str(second_db), "list"]
-        listed = subprocess.run(list_cmd, text=True, capture_output=True, cwd=Path(__file__).resolve().parents[2])
+        self.run_cli("import", "--input", str(export_path), db=second_db)
+        listed = self.run_cli("list", db=second_db)
         self.assertIn("1\tactive\tA", listed.stdout)
 
         data = json.loads(export_path.read_text(encoding="utf-8"))
