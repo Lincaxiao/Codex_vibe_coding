@@ -3,6 +3,8 @@ out/
 __pycache__/
 *.pyc
 .venv/
+frontend/node_modules/
+frontend/dist/
 tests/_tmp/
 tests/_tmp_probe/
 tests/tmp*/
