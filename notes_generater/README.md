@@ -1,52 +1,148 @@
-# notes-generater
+# 课程笔记助手（GUI 用户手册）
 
-PR1 scaffolding for a local macOS notes agent.
+## 产品定位
+课程笔记助手是一个本地运行的图形化工具，用来把课程资料整理为结构化中文笔记。
 
-## What is implemented in PR1
+它的特点是：
+- 全程以 GUI 操作为主，不需要你手写命令。
+- 支持“一个总工作区 + 多门课程子目录”的管理方式。
+- 内置多轮工作流（Round0/1/2/3/Final），可生成、检查、修订并沉淀最终笔记。
 
-- Workspace + multi-course project creation
-- Default path mapping:
-  - `projects/<course_id>` -> `project_root`
-  - `notes/<course_id>` -> `notes_root`
-- Project scaffold creation:
-  - `project.yaml`
-  - `state/session.json`
-  - `state/round_status.json`
-  - `runs/`
-  - `artifacts/`
-- Minimal CLI for create/show/list project
-- Source snapshot + hash verification CLI
-- Codex executor CLI (single run with prompt/stdout/manifest persistence)
+---
 
-## Run commands
+## 你会看到的界面结构
+主界面分为 4 个页面（左侧导航）：
+1. `项目`：创建或加载课程项目。
+2. `流程`：初始化第 0 轮、执行/恢复工作流、执行检查。
+3. `审阅`：追加人工反馈条目。
+4. `运行记录`：查看历史运行并查看差异补丁。
 
-```bash
-PYTHONPATH=src python3 -m notes_agent.cli create-project --course-id "CS 61A" --workspace-root "/path/to/workspace"
-PYTHONPATH=src python3 -m notes_agent.cli list-projects --workspace-root "/path/to/workspace"
-PYTHONPATH=src python3 -m notes_agent.cli show-project --project-root "/path/to/workspace/projects/cs-61a"
-PYTHONPATH=src python3 -m notes_agent.cli snapshot-sources --project-root "/path/to/workspace/projects/cs-61a" --source "/path/to/slides" --source "/path/to/code"
-PYTHONPATH=src python3 -m notes_agent.cli verify-snapshot --project-root "/path/to/workspace/projects/cs-61a"
-PYTHONPATH=src python3 -m notes_agent.cli init-round0 --project-root "/path/to/workspace/projects/cs-61a"
-PYTHONPATH=src python3 -m notes_agent.cli run-check --project-root "/path/to/workspace/projects/cs-61a"
-PYTHONPATH=src python3 -m notes_agent.cli run-codex --project-root "/path/to/workspace/projects/cs-61a" --prompt "请列出当前目录文件"
-PYTHONPATH=src python3 -m notes_agent.cli run-workflow --project-root "/path/to/workspace/projects/cs-61a" --from-round round1 --to-round final
-PYTHONPATH=src python3 -m notes_agent.cli run-workflow --project-root "/path/to/workspace/projects/cs-61a" --pause-after-each-round --max-changed-lines 200 --max-changed-files 10
-PYTHONPATH=src python3 -m notes_agent.cli resume-workflow --project-root "/path/to/workspace/projects/cs-61a" --to-round final
-PYTHONPATH=src python3 -m notes_agent.cli add-feedback --project-root "/path/to/workspace/projects/cs-61a" --item "术语解释不够清晰" --item "增加练习题"
-PYTHONPATH=src python3 -m notes_agent.cli list-runs --project-root "/path/to/workspace/projects/cs-61a"
-PYTHONPATH=src python3 -m notes_agent.cli latest-workflow --project-root "/path/to/workspace/projects/cs-61a"
-PYTHONPATH=src python3 -m notes_agent.cli show-patch --project-root "/path/to/workspace/projects/cs-61a" --run-id "wf_20260214_xxx" --round-name round1
-```
+界面上方有当前项目信息与状态徽标（`空闲/运行中`），下方有日志区显示每次操作结果。
 
-## Run GUI
+---
 
-```bash
-pip install -e ".[gui]"
-notes-agent-gui
-```
+## 核心概念（先理解这 4 个）
+1. `工作区目录`：你的总目录，里面可以放很多课程。
+2. `课程标识`：每门课程的唯一名字（例如“机器学习导论-2026春”）。
+3. `项目目录`：该课程的运行状态与历史记录目录（系统自动生成）。
+4. `笔记目录`：该课程最终笔记输出目录（系统自动生成）。
 
-## Run tests
+这意味着你可以在同一个工作区下管理多门课，每门课互不影响。
 
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -q
-```
+---
+
+## 工作流轮次说明
+工作流按轮次推进：
+
+1. `Round0`：初始化笔记骨架与检查脚本。
+2. `Round1`：按讲次生成笔记初稿结构。
+3. `Round2`：补充解释、示例、练习和易错点。
+4. `Round3`：根据审阅反馈做定向修订。
+5. `Final`：整理速查表、术语表并做最终一致性收敛。
+
+---
+
+## 首次使用（推荐流程）
+
+### 第一步：创建或加载项目（项目页）
+1. 点击 `选择工作区`，选一个总目录。
+2. 在 `课程标识` 输入课程名。
+3. 点击 `创建或加载项目`。
+4. 成功后会自动显示该课程的 `项目目录` 与 `笔记目录`。
+
+说明：
+- 如果课程已经存在，会自动加载已有项目。
+- 如果是新课程，会自动创建对应目录。
+
+### 第二步：初始化第 0 轮（流程页）
+1. 点击 `初始化第 0 轮`。
+2. 系统会创建笔记骨架并立即做一次检查。
+
+### 第三步：执行主工作流（流程页）
+1. 选择 `起始轮次` 与 `结束轮次`。
+2. 可选填写 `目标讲次`（只处理某一讲次时使用）。
+3. 设置改动阈值：
+   - `最大改动行数`
+   - `最大改动文件数`
+4. 按需勾选 `每轮后暂停`。
+5. 点击 `执行流程`。
+
+### 第四步：人工审阅并追加反馈（审阅页）
+1. 每行输入一条反馈（例如“术语解释不够清晰”）。
+2. 点击 `追加反馈条目`。
+3. 返回流程页点击 `恢复流程`，让系统继续处理反馈。
+
+### 第五步：查看历史与改动（运行记录页）
+1. 点击 `列出运行记录` 查看历史 run。
+2. 把某个运行编号填到 `运行编号`。
+3. 需要时填写 `轮次`（可选）。
+4. 点击 `查看差异补丁` 查看本次改动内容。
+
+---
+
+## 各页面字段与按钮详细说明
+
+### 1) 项目页
+- `工作区目录`：总目录入口。
+- `课程标识`：课程唯一标识。
+- `创建或加载项目`：同名课程存在则加载，不存在则创建。
+- `项目目录/笔记目录`：只读显示，便于确认当前项目位置。
+
+### 2) 流程页
+- `起始轮次` / `结束轮次`：定义本次执行范围。
+- `目标讲次`：只处理特定 lecture（可留空表示全量）。
+- `最大改动行数` / `最大改动文件数`：防止一次改动过大。
+- `每轮后暂停`：每完成一轮就停下，方便你逐轮审阅。
+- `启用网页搜索`：界面预留项；当前默认工作流仍以本地资料为主。
+- `初始化第 0 轮`：生成笔记骨架。
+- `执行流程`：从起始轮次跑到结束轮次。
+- `恢复流程`：从中断点继续。
+- `执行检查`：只做质量检查，不触发新的生成。
+
+### 3) 审阅页
+- 文本框：每行一条反馈。
+- `追加反馈条目`：将反馈追加到当前课程的反馈文件。
+
+### 4) 运行记录页
+- `列出运行记录`：显示该课程历史运行列表与当前轮次状态。
+- `运行编号`：指定要查看的运行。
+- `轮次`：查看某一轮补丁时填写（可选）。
+- `查看差异补丁`：展示改动 diff，便于复盘。
+
+---
+
+## 常见使用策略（推荐）
+1. 第一次跑：`Round0 -> Round2`，先拿到结构化初稿。
+2. 人工审阅后：在`审阅`页追加反馈，再 `恢复流程 -> Final`。
+3. 大课程分批处理：在 `目标讲次` 填单个 lecture，分批执行。
+4. 想要更可控：勾选 `每轮后暂停`，逐轮确认再继续。
+
+---
+
+## 常见问题
+
+### 1) 为什么流程会停在 `paused`？
+通常是以下原因：
+- 你开启了 `每轮后暂停`。
+- 本轮改动超过阈值（最大改动行数/文件数）。
+
+处理方式：
+- 直接点 `恢复流程` 继续，或先审阅后再恢复。
+
+### 2) 为什么“查看差异补丁”提示未找到？
+可能是：
+- `运行编号` 填错。
+- 该运行本身没有生成补丁。
+- 指定了错误的 `轮次`。
+
+建议先点 `列出运行记录`，复制最新 run id 再查看。
+
+### 3) 一个工作区能放多少门课？
+没有固定上限。推荐每门课使用独立课程标识，便于长期维护和检索。
+
+---
+
+## 使用建议
+- 先小范围（单讲次）验证流程，再跑全量。
+- 先执行再审阅，不要一开始就追求一次到位。
+- 关键轮次建议保留暂停，确保内容质量可控。
