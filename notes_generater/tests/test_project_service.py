@@ -88,37 +88,6 @@ class ProjectServiceTests(unittest.TestCase):
         discovered_ids = [item.course_id for item in discovered]
         self.assertEqual(discovered_ids, ["course-a", "course-b"])
 
-    def test_allow_existing_does_not_reset_state_files(self) -> None:
-        workspace_root = self.tmp_path / "workspace"
-        config = self.service.create_project(CreateProjectRequest(course_id="course-a", workspace_root=workspace_root))
-
-        session_path = config.project_root / "state" / "session.json"
-        round_status_path = config.project_root / "state" / "round_status.json"
-        session_payload = {
-            "course_id": config.course_id,
-            "status": "paused",
-            "current_run_id": "wf_existing",
-            "created_at": "2026-01-01T00:00:00+00:00",
-            "updated_at": "2026-01-02T00:00:00+00:00",
-        }
-        round_status_payload = {
-            "round0": "completed",
-            "round1": "failed",
-            "round2": "pending",
-            "round3": "pending",
-            "final": "pending",
-        }
-        session_path.write_text(json.dumps(session_payload, ensure_ascii=False) + "\n", encoding="utf-8")
-        round_status_path.write_text(json.dumps(round_status_payload, ensure_ascii=False) + "\n", encoding="utf-8")
-
-        self.service.create_project(
-            CreateProjectRequest(course_id="course-a", workspace_root=workspace_root),
-            allow_existing=True,
-        )
-
-        self.assertEqual(json.loads(session_path.read_text(encoding="utf-8")), session_payload)
-        self.assertEqual(json.loads(round_status_path.read_text(encoding="utf-8")), round_status_payload)
-
 
 if __name__ == "__main__":
     unittest.main()

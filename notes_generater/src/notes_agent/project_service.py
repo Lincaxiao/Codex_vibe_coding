@@ -32,17 +32,13 @@ class ProjectService:
     ) -> ProjectConfig:
         config = self._resolve_config(request)
         config_path = config.project_root / PROJECT_CONFIG_FILE
-        project_exists = config_path.exists()
 
-        if project_exists and not allow_existing:
+        if config_path.exists() and not allow_existing:
             raise FileExistsError(f"project already exists: {config.project_root}")
 
         self._ensure_scaffold(config.project_root, config.notes_root)
         self._write_project_config(config)
-        if project_exists:
-            self._ensure_state_files(config.project_root, config.course_id)
-        else:
-            self._initialize_state(config.project_root, config.course_id)
+        self._initialize_state(config.project_root, config.course_id)
         return config
 
     def load_project_config(self, project_root: Path | str) -> ProjectConfig:
@@ -141,44 +137,25 @@ class ProjectService:
 
     def _initialize_state(self, project_root: Path, course_id: str) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
-        session_payload = self._default_session_payload(course_id=course_id, now=now)
-        round_status_payload = self._default_round_status_payload()
 
-        state_dir = project_root / STATE_DIR_NAME
-        self._write_json(state_dir / "session.json", session_payload)
-        self._write_json(state_dir / "round_status.json", round_status_payload)
-
-    def _ensure_state_files(self, project_root: Path, course_id: str) -> None:
-        state_dir = project_root / STATE_DIR_NAME
-        now = datetime.now(tz=timezone.utc).isoformat()
-        session_path = state_dir / "session.json"
-        round_status_path = state_dir / "round_status.json"
-
-        if not session_path.exists():
-            self._write_json(
-                session_path,
-                self._default_session_payload(course_id=course_id, now=now),
-            )
-        if not round_status_path.exists():
-            self._write_json(round_status_path, self._default_round_status_payload())
-
-    def _default_session_payload(self, *, course_id: str, now: str) -> dict[str, Any]:
-        return {
+        session_payload = {
             "course_id": course_id,
             "status": "idle",
             "current_run_id": None,
             "created_at": now,
             "updated_at": now,
         }
-
-    def _default_round_status_payload(self) -> dict[str, str]:
-        return {
+        round_status_payload = {
             "round0": "pending",
             "round1": "pending",
             "round2": "pending",
             "round3": "pending",
             "final": "pending",
         }
+
+        state_dir = project_root / STATE_DIR_NAME
+        self._write_json(state_dir / "session.json", session_payload)
+        self._write_json(state_dir / "round_status.json", round_status_payload)
 
     def _write_project_config(self, config: ProjectConfig) -> None:
         self._write_json(config.project_root / PROJECT_CONFIG_FILE, config.to_dict())

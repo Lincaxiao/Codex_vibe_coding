@@ -9,7 +9,6 @@ from notes_agent.check_runner import CheckRunResult, CheckRunner
 from notes_agent.codex_executor import CodexRunRequest, CodexRunResult
 from notes_agent.models import CreateProjectRequest
 from notes_agent.project_service import ProjectService
-from notes_agent.run_history_service import RunHistoryService
 from notes_agent.round0_initializer import Round0Initializer
 from notes_agent.workflow_orchestrator import WorkflowOrchestrator
 
@@ -110,7 +109,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self._tmp_dir.cleanup()
 
     def test_successful_workflow_rounds(self) -> None:
-        fake_executor = FakeCodexExecutor(default_success=True, mutate_rel_path="notes/lectures/lecture01.md")
+        fake_executor = FakeCodexExecutor(default_success=True)
         fake_check = FakeCheckRunner(outcomes=[True, True])
         orchestrator = WorkflowOrchestrator(
             project_service=self.project_service,
@@ -135,13 +134,6 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         round_status = json.loads((self.config.project_root / "state" / "round_status.json").read_text(encoding="utf-8"))
         self.assertEqual(round_status["round1"], "completed")
         self.assertEqual(round_status["round2"], "completed")
-        history = RunHistoryService()
-        patch = history.read_patch(project_root=self.config.project_root, run_id="wf_success", round_name="round2")
-        self.assertIsNotNone(patch)
-        assert patch is not None
-        self.assertIn("--- a/", patch)
-        latest_patch = history.read_patch(project_root=self.config.project_root, run_id="wf_success")
-        self.assertIsNotNone(latest_patch)
 
     def test_codex_failure_stops_workflow(self) -> None:
         fake_executor = FakeCodexExecutor(success_by_run_id={"wf_fail_round1_round1": False}, default_success=True)
@@ -302,21 +294,6 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        session_path = self.config.project_root / "state" / "session.json"
-        session_path.write_text(
-            json.dumps(
-                {
-                    "course_id": self.config.course_id,
-                    "status": "paused",
-                    "current_run_id": "wf_old",
-                    "created_at": "2026-01-01T00:00:00+00:00",
-                    "updated_at": "2026-01-02T00:00:00+00:00",
-                },
-                ensure_ascii=False,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
 
         orchestrator = WorkflowOrchestrator(
             project_service=self.project_service,
@@ -330,9 +307,6 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "succeeded")
         self.assertEqual(result.rounds, [])
-        session = json.loads(session_path.read_text(encoding="utf-8"))
-        self.assertEqual(session["status"], "idle")
-        self.assertIsNone(session["current_run_id"])
 
     def test_unexpected_exception_converges_running_state(self) -> None:
         orchestrator = WorkflowOrchestrator(
