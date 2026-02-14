@@ -2,6 +2,7 @@ from .check_runner import CheckRunResult, CheckRunner
 from .codex_executor import CodexExecutor, CodexRunRequest, CodexRunResult
 from .diff_service import DiffService, DiffSummary
 from .feedback_service import FeedbackAppendResult, FeedbackService
+from .gui_settings import GuiSettings, default_settings_path, load_gui_settings, save_gui_settings
 from .models import CreateProjectRequest, ProjectConfig
 from .project_service import ProjectService, slugify_course_id
 from .round0_initializer import Round0InitResult, Round0Initializer
@@ -19,6 +20,7 @@ __all__ = [
     "CreateProjectRequest",
     "FeedbackAppendResult",
     "FeedbackService",
+    "GuiSettings",
     "ProjectConfig",
     "ProjectService",
     "Round0InitResult",
@@ -29,5 +31,8 @@ __all__ = [
     "SnapshotVerificationResult",
     "WorkflowOrchestrator",
     "WorkflowRunResult",
+    "default_settings_path",
+    "load_gui_settings",
+    "save_gui_settings",
     "slugify_course_id",
 ]

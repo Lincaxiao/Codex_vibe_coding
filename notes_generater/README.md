@@ -34,6 +34,13 @@ PYTHONPATH=src python3 -m notes_agent.cli run-workflow --project-root "/path/to/
 PYTHONPATH=src python3 -m notes_agent.cli add-feedback --project-root "/path/to/workspace/projects/cs-61a" --item "术语解释不够清晰" --item "增加练习题"
 ```
 
+## Run GUI
+
+```bash
+pip install -e ".[gui]"
+notes-agent-gui
+```
+
 ## Run tests
 
 ```bash
