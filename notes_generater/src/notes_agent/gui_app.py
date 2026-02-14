@@ -138,6 +138,8 @@ def main() -> int:
             init_round0_btn.clicked.connect(self._on_init_round0)
             run_workflow_btn = QPushButton("Run Workflow")
             run_workflow_btn.clicked.connect(self._on_run_workflow)
+            resume_workflow_btn = QPushButton("Resume Workflow")
+            resume_workflow_btn.clicked.connect(self._on_resume_workflow)
             run_check_btn = QPushButton("Run Check")
             run_check_btn.clicked.connect(self._on_run_check)
 
@@ -156,6 +158,7 @@ def main() -> int:
             action_layout.addWidget(init_round0_btn, 4, 0)
             action_layout.addWidget(run_workflow_btn, 4, 1)
             action_layout.addWidget(run_check_btn, 4, 2)
+            action_layout.addWidget(resume_workflow_btn, 4, 3)
 
             feedback_box = QGroupBox("Feedback")
             feedback_layout = QVBoxLayout(feedback_box)
@@ -300,6 +303,32 @@ def main() -> int:
 
             self._save_settings()
             self._run_task(f"Run Workflow {from_round}->{to_round}", task)
+
+        def _on_resume_workflow(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+
+            to_round = self.to_round_combo.currentText()
+            target = self.target_lecture_edit.text().strip()
+            max_lines = _safe_int(self.max_lines_edit.text().strip(), config.max_changed_lines)
+            max_files = _safe_int(self.max_files_edit.text().strip(), config.max_changed_files)
+
+            def task() -> dict[str, Any]:
+                result = self.workflow_orchestrator.resume(
+                    project_root=config.project_root,
+                    notes_root=config.notes_root,
+                    to_round=to_round,  # type: ignore[arg-type]
+                    target_lectures=[target] if target else [],
+                    search_enabled=self.search_check.isChecked(),
+                    pause_after_each_round=self.pause_each_round_check.isChecked(),
+                    max_changed_lines=max_lines,
+                    max_changed_files=max_files,
+                )
+                return result.to_dict()
+
+            self._save_settings()
+            self._run_task(f"Resume Workflow -> {to_round}", task)
 
         def _on_run_check(self) -> None:
             config = self._require_config()

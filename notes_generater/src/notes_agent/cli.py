@@ -161,6 +161,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     feedback_parser.add_argument("--title", help="Optional section title")
     feedback_parser.add_argument("--author", help="Optional feedback author")
+
+    resume_parser = subparsers.add_parser(
+        "resume-workflow",
+        help="Resume workflow from failed/pending/paused round status",
+    )
+    resume_parser.add_argument("--project-root", required=True, type=Path)
+    resume_parser.add_argument("--notes-root", type=Path, help="Optional override; defaults to project config")
+    resume_parser.add_argument(
+        "--to-round",
+        choices=["round0", "round1", "round2", "round3", "final"],
+        default="final",
+    )
+    resume_parser.add_argument(
+        "--target-lecture",
+        dest="target_lectures",
+        action="append",
+        help="Target lecture identifier (repeatable)",
+    )
+    resume_parser.add_argument("--allow-external-refs", action="store_true")
+    resume_parser.add_argument("--search", action="store_true")
+    resume_parser.add_argument("--max-retries", type=int, default=2)
+    resume_parser.add_argument("--workflow-run-id", help="Optional workflow run id override")
+    resume_parser.add_argument("--disable-auto-repair", action="store_true")
+    resume_parser.add_argument("--pause-after-each-round", action="store_true")
+    resume_parser.add_argument("--max-changed-lines", type=int)
+    resume_parser.add_argument("--max-changed-files", type=int)
     return parser
 
 
@@ -318,6 +344,24 @@ def main() -> int:
         )
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
         return 0
+
+    if args.command == "resume-workflow":
+        result = workflow_orchestrator.resume(
+            project_root=args.project_root,
+            notes_root=args.notes_root,
+            to_round=args.to_round,
+            target_lectures=args.target_lectures or [],
+            allow_external_refs=args.allow_external_refs,
+            search_enabled=args.search,
+            max_retries=args.max_retries,
+            workflow_run_id=args.workflow_run_id,
+            auto_repair_check_failures=not args.disable_auto_repair,
+            pause_after_each_round=args.pause_after_each_round if args.pause_after_each_round else None,
+            max_changed_lines=args.max_changed_lines,
+            max_changed_files=args.max_changed_files,
+        )
+        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        return 0 if result.status in {"succeeded", "paused"} else 1
 
     parser.error(f"unsupported command: {args.command}")
     return 2

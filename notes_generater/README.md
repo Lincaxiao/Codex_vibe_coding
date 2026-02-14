@@ -31,6 +31,7 @@ PYTHONPATH=src python3 -m notes_agent.cli run-check --project-root "/path/to/wor
 PYTHONPATH=src python3 -m notes_agent.cli run-codex --project-root "/path/to/workspace/projects/cs-61a" --prompt "请列出当前目录文件"
 PYTHONPATH=src python3 -m notes_agent.cli run-workflow --project-root "/path/to/workspace/projects/cs-61a" --from-round round1 --to-round final
 PYTHONPATH=src python3 -m notes_agent.cli run-workflow --project-root "/path/to/workspace/projects/cs-61a" --pause-after-each-round --max-changed-lines 200 --max-changed-files 10
+PYTHONPATH=src python3 -m notes_agent.cli resume-workflow --project-root "/path/to/workspace/projects/cs-61a" --to-round final
 PYTHONPATH=src python3 -m notes_agent.cli add-feedback --project-root "/path/to/workspace/projects/cs-61a" --item "术语解释不够清晰" --item "增加练习题"
 ```
 

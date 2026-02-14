@@ -394,12 +394,85 @@ class WorkflowOrchestrator:
         self._write_json(result.workflow_result_path, result.to_dict())
         return result
 
+    def resume(
+        self,
+        *,
+        project_root: Path | str,
+        to_round: RoundName = "final",
+        notes_root: Path | str | None = None,
+        target_lectures: list[str] | None = None,
+        allow_external_refs: bool = False,
+        search_enabled: bool = False,
+        max_retries: int = 2,
+        workflow_run_id: str | None = None,
+        auto_repair_check_failures: bool = True,
+        pause_after_each_round: bool | None = None,
+        max_changed_lines: int | None = None,
+        max_changed_files: int | None = None,
+    ) -> WorkflowRunResult:
+        root = Path(project_root).expanduser().resolve()
+        round_status_path = root / "state" / "round_status.json"
+        round_status = self._read_json(round_status_path)
+        from_round = self._resolve_resume_from_round(round_status=round_status)
+        if from_round is None:
+            done_id = workflow_run_id or _default_workflow_run_id()
+            done_dir = root / "runs" / done_id
+            done_dir.mkdir(parents=True, exist_ok=False)
+            result = WorkflowRunResult(
+                workflow_run_id=done_id,
+                status="succeeded",
+                started_at=_now_iso(),
+                finished_at=_now_iso(),
+                rounds=[],
+                workflow_result_path=done_dir / "workflow_result.json",
+            )
+            self._write_json(result.workflow_result_path, result.to_dict())
+            return result
+
+        return self.run(
+            project_root=root,
+            from_round=from_round,
+            to_round=to_round,
+            notes_root=notes_root,
+            target_lectures=target_lectures,
+            allow_external_refs=allow_external_refs,
+            search_enabled=search_enabled,
+            max_retries=max_retries,
+            workflow_run_id=workflow_run_id,
+            auto_repair_check_failures=auto_repair_check_failures,
+            pause_after_each_round=pause_after_each_round,
+            max_changed_lines=max_changed_lines,
+            max_changed_files=max_changed_files,
+        )
+
     def _select_rounds(self, *, from_round: RoundName, to_round: RoundName) -> list[RoundName]:
         start = RUN_ORDER.index(from_round)
         end = RUN_ORDER.index(to_round)
         if start > end:
             raise ValueError(f"from_round must be <= to_round, got {from_round} -> {to_round}")
         return RUN_ORDER[start : end + 1]
+
+    def _resolve_resume_from_round(self, *, round_status: dict[str, Any]) -> RoundName | None:
+        statuses = [str(round_status.get(round_name, "pending")) for round_name in RUN_ORDER]
+        first_started_index = 0
+        for idx, status in enumerate(statuses):
+            if status != "pending":
+                first_started_index = idx
+                break
+        else:
+            return "round0"
+
+        for idx in range(first_started_index, len(RUN_ORDER)):
+            round_name = RUN_ORDER[idx]
+            status = statuses[idx]
+            if status in {"pending", "failed", "running"}:
+                return round_name
+            if status == "paused":
+                next_idx = idx + 1
+                if next_idx >= len(RUN_ORDER):
+                    return None
+                return RUN_ORDER[next_idx]
+        return None
 
     def _build_round_prompt(
         self,

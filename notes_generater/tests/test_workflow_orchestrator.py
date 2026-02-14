@@ -243,6 +243,66 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(result.rounds[0].round_name, "round0")
         self.assertTrue((self.config.notes_root / "scripts" / "check.sh").exists())
 
+    def test_resume_from_paused_round(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True, mutate_rel_path="notes/lectures/lecture01.md")
+        fake_check = FakeCheckRunner(outcomes=[True, True])
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=fake_check,  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+
+        first = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round3",
+            workflow_run_id="wf_pause_for_resume",
+            pause_after_each_round=True,
+        )
+        self.assertEqual(first.status, "paused")
+        self.assertEqual(first.rounds[0].round_name, "round1")
+
+        resumed = orchestrator.resume(
+            project_root=self.config.project_root,
+            to_round="round3",
+            workflow_run_id="wf_resumed",
+            pause_after_each_round=False,
+        )
+        self.assertIn(resumed.status, {"succeeded", "paused"})
+        if resumed.rounds:
+            self.assertEqual(resumed.rounds[0].round_name, "round2")
+
+    def test_resume_when_all_rounds_completed_returns_noop(self) -> None:
+        round_status_path = self.config.project_root / "state" / "round_status.json"
+        round_status_path.write_text(
+            json.dumps(
+                {
+                    "round0": "completed",
+                    "round1": "completed",
+                    "round2": "completed",
+                    "round3": "completed",
+                    "final": "completed",
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        result = orchestrator.resume(
+            project_root=self.config.project_root,
+            workflow_run_id="wf_resume_noop",
+        )
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(result.rounds, [])
+
 
 if __name__ == "__main__":
     unittest.main()
