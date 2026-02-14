@@ -10,6 +10,7 @@ from .feedback_service import FeedbackService
 from .gui_settings import GuiSettings, load_gui_settings, save_gui_settings
 from .models import CreateProjectRequest, ProjectConfig
 from .project_service import ProjectService, slugify_course_id
+from .run_history_service import RunHistoryService
 from .round0_initializer import Round0Initializer
 from .check_runner import CheckRunner
 from .workflow_orchestrator import WorkflowOrchestrator
@@ -80,6 +81,7 @@ def main() -> int:
             self.round0_initializer = Round0Initializer()
             self.check_runner = CheckRunner()
             self.feedback_service = FeedbackService()
+            self.run_history_service = RunHistoryService()
             self.workflow_orchestrator = WorkflowOrchestrator(
                 project_service=self.project_service,
                 check_runner=self.check_runner,
@@ -142,6 +144,8 @@ def main() -> int:
             resume_workflow_btn.clicked.connect(self._on_resume_workflow)
             run_check_btn = QPushButton("Run Check")
             run_check_btn.clicked.connect(self._on_run_check)
+            list_runs_btn = QPushButton("List Runs")
+            list_runs_btn.clicked.connect(self._on_list_runs)
 
             action_layout.addWidget(QLabel("From"), 0, 0)
             action_layout.addWidget(self.from_round_combo, 0, 1)
@@ -159,6 +163,7 @@ def main() -> int:
             action_layout.addWidget(run_workflow_btn, 4, 1)
             action_layout.addWidget(run_check_btn, 4, 2)
             action_layout.addWidget(resume_workflow_btn, 4, 3)
+            action_layout.addWidget(list_runs_btn, 5, 0)
 
             feedback_box = QGroupBox("Feedback")
             feedback_layout = QVBoxLayout(feedback_box)
@@ -342,6 +347,19 @@ def main() -> int:
                 ).to_dict()
 
             self._run_task("Run Check", task)
+
+        def _on_list_runs(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+
+            records = [item.to_dict() for item in self.run_history_service.list_runs(project_root=config.project_root)]
+            round_status = self.run_history_service.load_round_status(project_root=config.project_root)
+            payload = {
+                "round_status": round_status,
+                "runs": records,
+            }
+            self._log(_to_json(payload))
 
         def _on_add_feedback(self) -> None:
             config = self._require_config()

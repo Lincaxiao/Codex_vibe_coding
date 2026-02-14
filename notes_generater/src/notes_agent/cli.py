@@ -10,6 +10,7 @@ from .codex_executor import CodexExecutor, CodexRunRequest
 from .feedback_service import FeedbackService
 from .models import CreateProjectRequest
 from .project_service import ProjectService
+from .run_history_service import RunHistoryService
 from .round0_initializer import Round0Initializer
 from .snapshot_service import SnapshotService
 from .workflow_orchestrator import WorkflowOrchestrator
@@ -187,6 +188,14 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("--pause-after-each-round", action="store_true")
     resume_parser.add_argument("--max-changed-lines", type=int)
     resume_parser.add_argument("--max-changed-files", type=int)
+
+    list_runs_parser = subparsers.add_parser("list-runs", help="List run history for a project")
+    list_runs_parser.add_argument("--project-root", required=True, type=Path)
+
+    latest_workflow_parser = subparsers.add_parser(
+        "latest-workflow", help="Show latest workflow_result.json if available"
+    )
+    latest_workflow_parser.add_argument("--project-root", required=True, type=Path)
     return parser
 
 
@@ -199,6 +208,7 @@ def main() -> int:
     round0_initializer = Round0Initializer()
     check_runner = CheckRunner()
     feedback_service = FeedbackService()
+    run_history_service = RunHistoryService()
     workflow_orchestrator = WorkflowOrchestrator(
         project_service=service,
         codex_executor=codex_executor,
@@ -362,6 +372,16 @@ def main() -> int:
         )
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
         return 0 if result.status in {"succeeded", "paused"} else 1
+
+    if args.command == "list-runs":
+        records = run_history_service.list_runs(project_root=args.project_root)
+        print(json.dumps([item.to_dict() for item in records], indent=2, ensure_ascii=False))
+        return 0
+
+    if args.command == "latest-workflow":
+        payload = run_history_service.latest_workflow_result(project_root=args.project_root)
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0 if payload is not None else 1
 
     parser.error(f"unsupported command: {args.command}")
     return 2

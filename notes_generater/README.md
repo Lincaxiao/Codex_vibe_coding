@@ -33,6 +33,8 @@ PYTHONPATH=src python3 -m notes_agent.cli run-workflow --project-root "/path/to/
 PYTHONPATH=src python3 -m notes_agent.cli run-workflow --project-root "/path/to/workspace/projects/cs-61a" --pause-after-each-round --max-changed-lines 200 --max-changed-files 10
 PYTHONPATH=src python3 -m notes_agent.cli resume-workflow --project-root "/path/to/workspace/projects/cs-61a" --to-round final
 PYTHONPATH=src python3 -m notes_agent.cli add-feedback --project-root "/path/to/workspace/projects/cs-61a" --item "术语解释不够清晰" --item "增加练习题"
+PYTHONPATH=src python3 -m notes_agent.cli list-runs --project-root "/path/to/workspace/projects/cs-61a"
+PYTHONPATH=src python3 -m notes_agent.cli latest-workflow --project-root "/path/to/workspace/projects/cs-61a"
 ```
 
 ## Run GUI
