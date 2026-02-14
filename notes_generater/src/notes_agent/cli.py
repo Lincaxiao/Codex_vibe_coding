@@ -196,6 +196,11 @@ def build_parser() -> argparse.ArgumentParser:
         "latest-workflow", help="Show latest workflow_result.json if available"
     )
     latest_workflow_parser.add_argument("--project-root", required=True, type=Path)
+
+    show_patch_parser = subparsers.add_parser("show-patch", help="Show changes.patch by run_id")
+    show_patch_parser.add_argument("--project-root", required=True, type=Path)
+    show_patch_parser.add_argument("--run-id", required=True, help="Run id under project_root/runs")
+    show_patch_parser.add_argument("--round-name", help="Optional round name for workflow runs")
     return parser
 
 
@@ -382,6 +387,18 @@ def main() -> int:
         payload = run_history_service.latest_workflow_result(project_root=args.project_root)
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0 if payload is not None else 1
+
+    if args.command == "show-patch":
+        patch = run_history_service.read_patch(
+            project_root=args.project_root,
+            run_id=args.run_id,
+            round_name=args.round_name,
+        )
+        if patch is None:
+            print("")
+            return 1
+        print(patch)
+        return 0
 
     parser.error(f"unsupported command: {args.command}")
     return 2

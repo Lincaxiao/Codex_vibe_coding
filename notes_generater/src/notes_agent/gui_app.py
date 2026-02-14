@@ -133,6 +133,8 @@ def main() -> int:
             self.target_lecture_edit = QLineEdit()
             self.max_lines_edit = QLineEdit()
             self.max_files_edit = QLineEdit()
+            self.patch_run_id_edit = QLineEdit()
+            self.patch_round_edit = QLineEdit()
             self.pause_each_round_check = QCheckBox("Pause After Each Round")
             self.search_check = QCheckBox("Enable Web Search")
 
@@ -146,6 +148,8 @@ def main() -> int:
             run_check_btn.clicked.connect(self._on_run_check)
             list_runs_btn = QPushButton("List Runs")
             list_runs_btn.clicked.connect(self._on_list_runs)
+            show_patch_btn = QPushButton("Show Patch")
+            show_patch_btn.clicked.connect(self._on_show_patch)
 
             action_layout.addWidget(QLabel("From"), 0, 0)
             action_layout.addWidget(self.from_round_combo, 0, 1)
@@ -159,11 +163,16 @@ def main() -> int:
             action_layout.addWidget(self.max_files_edit, 2, 3)
             action_layout.addWidget(self.pause_each_round_check, 3, 0, 1, 2)
             action_layout.addWidget(self.search_check, 3, 2, 1, 2)
-            action_layout.addWidget(init_round0_btn, 4, 0)
-            action_layout.addWidget(run_workflow_btn, 4, 1)
-            action_layout.addWidget(run_check_btn, 4, 2)
-            action_layout.addWidget(resume_workflow_btn, 4, 3)
-            action_layout.addWidget(list_runs_btn, 5, 0)
+            action_layout.addWidget(QLabel("Patch Run ID"), 4, 0)
+            action_layout.addWidget(self.patch_run_id_edit, 4, 1)
+            action_layout.addWidget(QLabel("Patch Round"), 4, 2)
+            action_layout.addWidget(self.patch_round_edit, 4, 3)
+            action_layout.addWidget(init_round0_btn, 5, 0)
+            action_layout.addWidget(run_workflow_btn, 5, 1)
+            action_layout.addWidget(run_check_btn, 5, 2)
+            action_layout.addWidget(resume_workflow_btn, 5, 3)
+            action_layout.addWidget(list_runs_btn, 6, 0)
+            action_layout.addWidget(show_patch_btn, 6, 1)
 
             feedback_box = QGroupBox("Feedback")
             feedback_layout = QVBoxLayout(feedback_box)
@@ -355,11 +364,33 @@ def main() -> int:
 
             records = [item.to_dict() for item in self.run_history_service.list_runs(project_root=config.project_root)]
             round_status = self.run_history_service.load_round_status(project_root=config.project_root)
+            if records and not self.patch_run_id_edit.text().strip():
+                self.patch_run_id_edit.setText(str(records[0]["run_id"]))
             payload = {
                 "round_status": round_status,
                 "runs": records,
             }
             self._log(_to_json(payload))
+
+        def _on_show_patch(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+
+            run_id = self.patch_run_id_edit.text().strip()
+            if not run_id:
+                self._error("Patch run id is required")
+                return
+            round_name = self.patch_round_edit.text().strip() or None
+            patch = self.run_history_service.read_patch(
+                project_root=config.project_root,
+                run_id=run_id,
+                round_name=round_name,
+            )
+            if patch is None:
+                self._error("Patch not found for the given run")
+                return
+            self._log(patch)
 
         def _on_add_feedback(self) -> None:
             config = self._require_config()

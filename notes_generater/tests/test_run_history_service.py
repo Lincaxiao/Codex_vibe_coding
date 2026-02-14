@@ -88,6 +88,42 @@ class RunHistoryServiceTests(unittest.TestCase):
         self.assertEqual(status["round0"], "completed")
         self.assertEqual(status["round1"], "paused")
 
+    def test_read_patch_for_workflow_round(self) -> None:
+        run_dir = self.config.project_root / "runs" / "wf_patch"
+        (run_dir / "round1").mkdir(parents=True, exist_ok=True)
+        patch_path = run_dir / "round1" / "changes.patch"
+        patch_path.write_text("diff --git a/x b/x\n", encoding="utf-8")
+        (run_dir / "workflow_result.json").write_text(
+            json.dumps(
+                {
+                    "workflow_run_id": "wf_patch",
+                    "status": "succeeded",
+                    "rounds": [{"round_name": "round1"}],
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        resolved = self.service.resolve_patch_path(project_root=self.config.project_root, run_id="wf_patch")
+        self.assertIsNotNone(resolved)
+        assert resolved is not None
+        self.assertEqual(resolved, patch_path)
+        patch_text = self.service.read_patch(project_root=self.config.project_root, run_id="wf_patch")
+        self.assertIsNotNone(patch_text)
+        assert patch_text is not None
+        self.assertIn("diff --git", patch_text)
+
+    def test_read_patch_for_codex_run(self) -> None:
+        run_dir = self.config.project_root / "runs" / "run_patch"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        patch_path = run_dir / "changes.patch"
+        patch_path.write_text("diff --git a/y b/y\n", encoding="utf-8")
+
+        resolved = self.service.resolve_patch_path(project_root=self.config.project_root, run_id="run_patch")
+        self.assertEqual(resolved, patch_path)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -104,6 +104,56 @@ class RunHistoryService:
             return {}
         return self._read_json(path)
 
+    def resolve_patch_path(
+        self,
+        *,
+        project_root: Path | str,
+        run_id: str,
+        round_name: str | None = None,
+    ) -> Path | None:
+        root = Path(project_root).expanduser().resolve()
+        run_dir = root / "runs" / run_id
+        if not run_dir.exists():
+            return None
+
+        if round_name:
+            candidate = run_dir / round_name / "changes.patch"
+            return candidate if candidate.exists() else None
+
+        direct_patch = run_dir / "changes.patch"
+        if direct_patch.exists():
+            return direct_patch
+
+        workflow_path = run_dir / "workflow_result.json"
+        if workflow_path.exists():
+            payload = self._read_json(workflow_path)
+            rounds = payload.get("rounds", [])
+            if isinstance(rounds, list):
+                for item in reversed(rounds):
+                    if isinstance(item, dict):
+                        name = item.get("round_name")
+                        if isinstance(name, str):
+                            candidate = run_dir / name / "changes.patch"
+                            if candidate.exists():
+                                return candidate
+        return None
+
+    def read_patch(
+        self,
+        *,
+        project_root: Path | str,
+        run_id: str,
+        round_name: str | None = None,
+    ) -> str | None:
+        patch_path = self.resolve_patch_path(
+            project_root=project_root,
+            run_id=run_id,
+            round_name=round_name,
+        )
+        if patch_path is None:
+            return None
+        return patch_path.read_text(encoding="utf-8", errors="replace")
+
     def _first_timestamp(self, payload: dict[str, Any]) -> str | None:
         for key in ("started_at", "created_at", "finished_at"):
             value = payload.get(key)
