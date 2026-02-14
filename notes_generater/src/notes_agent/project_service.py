@@ -48,7 +48,10 @@ class ProjectService:
     def load_project_config(self, project_root: Path | str) -> ProjectConfig:
         root = Path(project_root).expanduser().resolve()
         data = self._read_json(root / PROJECT_CONFIG_FILE)
-        return ProjectConfig.from_dict(data)
+        try:
+            return ProjectConfig.from_dict(data)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"invalid project config: {root / PROJECT_CONFIG_FILE}") from exc
 
     def update_project_config(
         self,
@@ -78,7 +81,11 @@ class ProjectService:
 
         results: list[ProjectConfig] = []
         for config_path in sorted(projects_dir.glob(f"*/{PROJECT_CONFIG_FILE}")):
-            results.append(ProjectConfig.from_dict(self._read_json(config_path)))
+            payload = self._read_json(config_path)
+            try:
+                results.append(ProjectConfig.from_dict(payload))
+            except (KeyError, TypeError, ValueError):
+                continue
         return results
 
     def _resolve_config(self, request: CreateProjectRequest) -> ProjectConfig:
@@ -184,8 +191,14 @@ class ProjectService:
         self._write_json(config.project_root / PROJECT_CONFIG_FILE, config.to_dict())
 
     def _read_json(self, path: Path) -> dict[str, Any]:
-        with path.open("r", encoding="utf-8") as fp:
-            return json.load(fp)
+        try:
+            with path.open("r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+        if isinstance(payload, dict):
+            return payload
+        return {}
 
     def _write_json(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

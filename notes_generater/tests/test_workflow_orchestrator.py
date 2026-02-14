@@ -403,6 +403,56 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 workflow_run_id="../wf_escape",
             )
 
+    def test_resume_when_final_paused_restarts_final_round(self) -> None:
+        round_status_path = self.config.project_root / "state" / "round_status.json"
+        round_status_path.write_text(
+            json.dumps(
+                {
+                    "round0": "completed",
+                    "round1": "completed",
+                    "round2": "completed",
+                    "round3": "completed",
+                    "final": "paused",
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+
+        result = orchestrator.resume(
+            project_root=self.config.project_root,
+            to_round="final",
+            workflow_run_id="wf_resume_final_paused",
+        )
+        self.assertTrue(result.rounds)
+        self.assertEqual(result.rounds[0].round_name, "final")
+
+    def test_run_tolerates_corrupted_state_json(self) -> None:
+        (self.config.project_root / "state" / "session.json").write_text("{broken\n", encoding="utf-8")
+        (self.config.project_root / "state" / "round_status.json").write_text("{broken\n", encoding="utf-8")
+
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            workflow_run_id="wf_corrupt_state",
+        )
+        self.assertEqual(result.status, "succeeded")
+
 
 if __name__ == "__main__":
     unittest.main()

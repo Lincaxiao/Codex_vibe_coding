@@ -10,6 +10,9 @@ from typing import Any
 
 from .path_utils import validate_path_component
 
+DEFAULT_CODEX_EXEC_TIMEOUT_SECONDS = 30 * 60
+DEFAULT_CODEX_VERSION_TIMEOUT_SECONDS = 20
+
 
 def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
@@ -60,6 +63,19 @@ class CodexRunResult:
 
 
 class CodexExecutor:
+    def __init__(
+        self,
+        *,
+        exec_timeout_seconds: int = DEFAULT_CODEX_EXEC_TIMEOUT_SECONDS,
+        version_timeout_seconds: int = DEFAULT_CODEX_VERSION_TIMEOUT_SECONDS,
+    ) -> None:
+        if exec_timeout_seconds <= 0:
+            raise ValueError(f"exec_timeout_seconds must be > 0, got {exec_timeout_seconds}")
+        if version_timeout_seconds <= 0:
+            raise ValueError(f"version_timeout_seconds must be > 0, got {version_timeout_seconds}")
+        self.exec_timeout_seconds = exec_timeout_seconds
+        self.version_timeout_seconds = version_timeout_seconds
+
     def run(self, request: CodexRunRequest) -> CodexRunResult:
         if request.max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {request.max_retries}")
@@ -94,16 +110,29 @@ class CodexExecutor:
                 notes_root=notes_root,
                 last_message_path=last_message_path,
             )
-            completed = subprocess.run(
-                command,
-                cwd=project_root,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            timed_out = False
+            timeout_error = f"codex exec timed out after {self.exec_timeout_seconds}s"
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=project_root,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=self.exec_timeout_seconds,
+                )
+                exit_code = completed.returncode
+                stdio = self._merge_stdio(completed.stdout, completed.stderr)
+            except subprocess.TimeoutExpired as exc:
+                timed_out = True
+                exit_code = 124
+                stdio = self._merge_stdio(
+                    self._timeout_output_text(exc.stdout),
+                    self._timeout_output_text(exc.stderr),
+                )
+                stdio = f"{stdio}\n{timeout_error}".strip()
             ended_at = _now_iso()
-            final_exit_code = completed.returncode
-            stdio = self._merge_stdio(completed.stdout, completed.stderr)
+            final_exit_code = exit_code
             combined_stdout_log.append(
                 f"=== attempt {attempt} ({started_at} -> {ended_at}) ===\n{stdio}\n"
             )
@@ -113,18 +142,18 @@ class CodexExecutor:
                     "attempt": attempt,
                     "started_at": started_at,
                     "ended_at": ended_at,
-                    "exit_code": completed.returncode,
+                    "exit_code": exit_code,
                     "retry_reason": None,
                 }
             )
 
-            if completed.returncode == 0:
+            if exit_code == 0:
                 final_error = None
                 break
 
-            final_error = self._extract_error(stdio) or f"codex exited with {completed.returncode}"
-            if attempt <= request.max_retries and self._is_retryable_failure(stdio):
-                attempts_log[-1]["retry_reason"] = "retryable_failure"
+            final_error = timeout_error if timed_out else self._extract_error(stdio) or f"codex exited with {exit_code}"
+            if attempt <= request.max_retries and (timed_out or self._is_retryable_failure(stdio)):
+                attempts_log[-1]["retry_reason"] = "timeout" if timed_out else "retryable_failure"
                 continue
             break
 
@@ -195,12 +224,16 @@ class CodexExecutor:
         return command
 
     def _read_codex_version(self) -> str:
-        completed = subprocess.run(
-            ["codex", "--version"],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        try:
+            completed = subprocess.run(
+                ["codex", "--version"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=self.version_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            return f"unknown (timeout>{self.version_timeout_seconds}s)"
         stdio = self._merge_stdio(completed.stdout, completed.stderr)
         line = self._first_nonempty_line(stdio)
         return line or "unknown"
@@ -253,6 +286,13 @@ class CodexExecutor:
                 return line
 
         return lines[0]
+
+    def _timeout_output_text(self, value: str | bytes | None) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value
 
     def _write_json(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

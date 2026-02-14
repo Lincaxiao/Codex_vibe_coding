@@ -175,8 +175,14 @@ class RunHistoryService:
         return None
 
     def _read_json(self, path: Path) -> dict[str, Any]:
-        with path.open("r", encoding="utf-8") as fp:
-            return json.load(fp)
+        try:
+            with path.open("r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+        if isinstance(payload, dict):
+            return payload
+        return {}
 
     def _validate_component(self, value: str) -> str | None:
         trimmed = value.strip()

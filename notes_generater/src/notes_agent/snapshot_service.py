@@ -169,8 +169,37 @@ class SnapshotService:
     def verify_snapshot_hashes(self, *, project_root: Path | str) -> SnapshotVerificationResult:
         root = Path(project_root).expanduser().resolve()
         source_hashes_path = root / "artifacts" / "source_hashes.json"
+        if not source_hashes_path.exists():
+            return SnapshotVerificationResult(
+                snapshot_id="unknown",
+                valid=False,
+                checked_files=0,
+                mismatches=[
+                    {
+                        "path": str(source_hashes_path),
+                        "reason": "missing_metadata",
+                        "expected": "",
+                        "actual": "",
+                    }
+                ],
+            )
         payload = self._read_json(source_hashes_path)
-        expected_files: dict[str, str] = payload.get("files", {})
+        expected_files_raw = payload.get("files")
+        if not isinstance(expected_files_raw, dict):
+            return SnapshotVerificationResult(
+                snapshot_id=str(payload.get("snapshot_id", "unknown")),
+                valid=False,
+                checked_files=0,
+                mismatches=[
+                    {
+                        "path": str(source_hashes_path),
+                        "reason": "invalid_metadata",
+                        "expected": "",
+                        "actual": "",
+                    }
+                ],
+            )
+        expected_files: dict[Any, Any] = expected_files_raw
         snapshot_id = str(payload.get("snapshot_id", "unknown"))
 
         mismatches: list[dict[str, str]] = []
@@ -243,8 +272,14 @@ class SnapshotService:
                 os.chmod(dir_path, 0o444)
 
     def _read_json(self, path: Path) -> dict[str, Any]:
-        with path.open("r", encoding="utf-8") as fp:
-            return json.load(fp)
+        try:
+            with path.open("r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(payload, dict):
+            return payload
+        return {}
 
     def _write_json(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

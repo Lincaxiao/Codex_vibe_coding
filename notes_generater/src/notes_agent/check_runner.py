@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+DEFAULT_CHECK_TIMEOUT_SECONDS = 5 * 60
+
 
 def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
@@ -37,6 +39,11 @@ class CheckRunResult:
 
 
 class CheckRunner:
+    def __init__(self, *, timeout_seconds: int = DEFAULT_CHECK_TIMEOUT_SECONDS) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError(f"timeout_seconds must be > 0, got {timeout_seconds}")
+        self.timeout_seconds = timeout_seconds
+
     def run(
         self,
         *,
@@ -51,20 +58,33 @@ class CheckRunner:
             raise FileNotFoundError(f"check script not found: {check_script}")
 
         started_at = _now_iso()
-        completed = subprocess.run(
-            [str(check_script), str(project)],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        timed_out = False
+        try:
+            completed = subprocess.run(
+                [str(check_script), str(project)],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=self.timeout_seconds,
+            )
+            exit_code = completed.returncode
+            stdout = completed.stdout
+            stderr = completed.stderr
+        except subprocess.TimeoutExpired as exc:
+            timed_out = True
+            exit_code = 124
+            stdout = self._timeout_output_text(exc.stdout)
+            stderr = self._timeout_output_text(exc.stderr)
+            timeout_error = f"check script timed out after {self.timeout_seconds}s"
+            stderr = f"{stderr}\n{timeout_error}".strip()
         finished_at = _now_iso()
 
-        payload = self._parse_json_payload(completed.stdout)
+        payload = self._parse_json_payload(stdout) if not timed_out else None
         result = CheckRunResult(
-            passed=completed.returncode == 0,
-            exit_code=completed.returncode,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+            passed=exit_code == 0,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
             payload=payload,
             started_at=started_at,
             finished_at=finished_at,
@@ -91,3 +111,10 @@ class CheckRunner:
             json.dump(payload, fp, indent=2, ensure_ascii=False, sort_keys=True)
             fp.write("\n")
         temp_path.replace(path)
+
+    def _timeout_output_text(self, value: str | bytes | None) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value

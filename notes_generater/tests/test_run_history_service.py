@@ -170,6 +170,16 @@ class RunHistoryServiceTests(unittest.TestCase):
         resolved = self.service.resolve_patch_path(project_root=self.config.project_root, run_id="wf_mal")
         self.assertIsNone(resolved)
 
+    def test_list_runs_tolerates_invalid_json_payload(self) -> None:
+        run_dir = self.config.project_root / "runs" / "wf_bad_json"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "workflow_result.json").write_text("{invalid\n", encoding="utf-8")
+
+        records = self.service.list_runs(project_root=self.config.project_root)
+        bad = next(item for item in records if item.run_id == "wf_bad_json")
+        self.assertEqual(bad.run_type, "workflow")
+        self.assertEqual(bad.status, "unknown")
+
 
 if __name__ == "__main__":
     unittest.main()

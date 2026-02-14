@@ -23,6 +23,13 @@ def _as_bool(value: Any, default: bool) -> bool:
     return default
 
 
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass(frozen=True)
 class GuiSettings:
     workspace_root: str = ""
@@ -56,8 +63,8 @@ class GuiSettings:
             target_lecture=str(payload.get("target_lecture", "")),
             from_round=str(payload.get("from_round", "round0")),
             to_round=str(payload.get("to_round", "round1")),
-            max_changed_lines=int(payload.get("max_changed_lines", 500)),
-            max_changed_files=int(payload.get("max_changed_files", 20)),
+            max_changed_lines=_as_int(payload.get("max_changed_lines", 500), 500),
+            max_changed_files=_as_int(payload.get("max_changed_files", 20), 20),
             pause_after_each_round=_as_bool(payload.get("pause_after_each_round", False), False),
             search_enabled=_as_bool(payload.get("search_enabled", False), False),
         )
@@ -72,8 +79,13 @@ def load_gui_settings(path: Path | None = None) -> GuiSettings:
     target = path or default_settings_path()
     if not target.exists():
         return GuiSettings()
-    with target.open("r", encoding="utf-8") as fp:
-        payload = json.load(fp)
+    try:
+        with target.open("r", encoding="utf-8") as fp:
+            payload = json.load(fp)
+    except json.JSONDecodeError:
+        return GuiSettings()
+    if not isinstance(payload, dict):
+        return GuiSettings()
     return GuiSettings.from_dict(payload)
 
 

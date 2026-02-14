@@ -157,6 +157,17 @@ class SnapshotServiceTests(unittest.TestCase):
         self.assertEqual(verified.checked_files, 1)
         self.assertEqual(verified.mismatches[0]["reason"], "invalid_path")
 
+    def test_verify_snapshot_handles_invalid_metadata_json(self) -> None:
+        project_root = self._create_project()
+        source_hashes_path = project_root / "artifacts" / "source_hashes.json"
+        source_hashes_path.parent.mkdir(parents=True, exist_ok=True)
+        source_hashes_path.write_text("{invalid-json\n", encoding="utf-8")
+
+        verified = self.snapshot_service.verify_snapshot_hashes(project_root=project_root)
+        self.assertFalse(verified.valid)
+        self.assertEqual(verified.checked_files, 0)
+        self.assertEqual(verified.mismatches[0]["reason"], "invalid_metadata")
+
 
 if __name__ == "__main__":
     unittest.main()

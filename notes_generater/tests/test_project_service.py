@@ -119,6 +119,24 @@ class ProjectServiceTests(unittest.TestCase):
         self.assertEqual(json.loads(session_path.read_text(encoding="utf-8")), session_payload)
         self.assertEqual(json.loads(round_status_path.read_text(encoding="utf-8")), round_status_payload)
 
+    def test_load_project_config_invalid_json_raises_value_error(self) -> None:
+        workspace_root = self.tmp_path / "workspace"
+        config = self.service.create_project(CreateProjectRequest(course_id="course-a", workspace_root=workspace_root))
+        (config.project_root / "project.yaml").write_text("{invalid-json\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "invalid project config"):
+            self.service.load_project_config(config.project_root)
+
+    def test_discover_workspace_projects_skips_invalid_project_yaml(self) -> None:
+        workspace_root = self.tmp_path / "workspace"
+        valid = self.service.create_project(CreateProjectRequest(course_id="course-a", workspace_root=workspace_root))
+        invalid_root = workspace_root / "projects" / "broken"
+        invalid_root.mkdir(parents=True, exist_ok=True)
+        (invalid_root / "project.yaml").write_text("{invalid-json\n", encoding="utf-8")
+
+        discovered = self.service.discover_workspace_projects(workspace_root)
+        self.assertEqual([item.course_id for item in discovered], [valid.course_id])
+
 
 if __name__ == "__main__":
     unittest.main()

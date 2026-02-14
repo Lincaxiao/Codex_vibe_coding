@@ -39,6 +39,26 @@ class GuiSettingsTests(unittest.TestCase):
             self.assertTrue(str(path).startswith(tmp))
             self.assertEqual(path.name, "settings.json")
 
+    def test_load_invalid_json_falls_back_to_defaults(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text("{broken-json\n", encoding="utf-8")
+            settings = load_gui_settings(settings_path)
+            self.assertEqual(settings, GuiSettings())
+
+    def test_from_dict_parses_boolean_and_int_safely(self) -> None:
+        payload = {
+            "pause_after_each_round": "false",
+            "search_enabled": "true",
+            "max_changed_lines": "not-an-int",
+            "max_changed_files": None,
+        }
+        settings = GuiSettings.from_dict(payload)
+        self.assertFalse(settings.pause_after_each_round)
+        self.assertTrue(settings.search_enabled)
+        self.assertEqual(settings.max_changed_lines, 500)
+        self.assertEqual(settings.max_changed_files, 20)
+
 
 if __name__ == "__main__":
     unittest.main()

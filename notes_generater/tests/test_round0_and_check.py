@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import subprocess
 import stat
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from notes_agent.check_runner import CheckRunner
 from notes_agent.models import CreateProjectRequest
@@ -93,6 +95,32 @@ class Round0AndCheckTests(unittest.TestCase):
         self.assertFalse(result.payload["passed"])
         errors = result.payload["errors"]
         self.assertTrue(any("low Chinese ratio" in item for item in errors))
+
+    def test_check_runner_timeout_returns_failed_result(self) -> None:
+        self.round0_initializer.initialize(
+            project_root=self.project_root,
+            notes_root=self.notes_root,
+            course_id="round0-test",
+        )
+
+        with mock.patch(
+            "notes_agent.check_runner.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(
+                cmd=["check.sh", str(self.project_root)],
+                timeout=1,
+                output="partial stdout",
+                stderr="partial stderr",
+            ),
+        ):
+            result = self.check_runner.run(
+                project_root=self.project_root,
+                notes_root=self.notes_root,
+            )
+
+        self.assertFalse(result.passed)
+        self.assertEqual(result.exit_code, 124)
+        self.assertIsNone(result.payload)
+        self.assertIn("timed out", result.stderr)
 
 
 if __name__ == "__main__":

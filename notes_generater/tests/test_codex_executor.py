@@ -154,6 +154,64 @@ class CodexExecutorTests(unittest.TestCase):
                 )
         mock_run.assert_not_called()
 
+    def test_timeout_returns_exit_124(self) -> None:
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            if cmd[:2] == ["codex", "--version"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="codex-cli 0.100.0-alpha.10\n", stderr="")
+            if cmd[0] == "codex" and "exec" in cmd:
+                raise subprocess.TimeoutExpired(
+                    cmd=cmd,
+                    timeout=kwargs.get("timeout", 0),
+                    output="partial output",
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        with mock.patch("notes_agent.codex_executor.subprocess.run", side_effect=fake_run):
+            result = self.executor.run(
+                CodexRunRequest(
+                    project_root=self.project_root,
+                    notes_root=self.notes_root,
+                    prompt="超时测试",
+                    run_id="run_timeout",
+                    max_retries=0,
+                )
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.exit_code, 124)
+        self.assertEqual(result.attempts, 1)
+        self.assertIsNotNone(result.error)
+        assert result.error is not None
+        self.assertIn("timed out", result.error)
+
+    def test_version_timeout_falls_back_to_unknown(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append(cmd)
+            if cmd[:2] == ["codex", "--version"]:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0))
+            if cmd[0] == "codex" and "exec" in cmd:
+                output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+                output_path.write_text("ok\n", encoding="utf-8")
+                return subprocess.CompletedProcess(cmd, 0, stdout="exec ok\n", stderr="")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        with mock.patch("notes_agent.codex_executor.subprocess.run", side_effect=fake_run):
+            result = self.executor.run(
+                CodexRunRequest(
+                    project_root=self.project_root,
+                    notes_root=self.notes_root,
+                    prompt="版本超时回退",
+                    run_id="run_version_timeout",
+                )
+            )
+
+        self.assertTrue(result.success)
+        manifest = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
+        self.assertIn("unknown (timeout>", manifest["codex_cli_version"])
+
 
 if __name__ == "__main__":
     unittest.main()
