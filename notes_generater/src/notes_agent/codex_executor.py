@@ -112,6 +112,7 @@ class CodexExecutor:
             )
             timed_out = False
             timeout_error = f"codex exec timed out after {self.exec_timeout_seconds}s"
+            launch_error: str | None = None
             try:
                 completed = subprocess.run(
                     command,
@@ -131,6 +132,10 @@ class CodexExecutor:
                     self._timeout_output_text(exc.stderr),
                 )
                 stdio = f"{stdio}\n{timeout_error}".strip()
+            except OSError as exc:
+                exit_code = 127
+                launch_error = f"failed to launch codex: {exc}"
+                stdio = launch_error
             ended_at = _now_iso()
             final_exit_code = exit_code
             combined_stdout_log.append(
@@ -151,7 +156,10 @@ class CodexExecutor:
                 final_error = None
                 break
 
-            final_error = timeout_error if timed_out else self._extract_error(stdio) or f"codex exited with {exit_code}"
+            if launch_error is not None:
+                final_error = launch_error
+            else:
+                final_error = timeout_error if timed_out else self._extract_error(stdio) or f"codex exited with {exit_code}"
             if attempt <= request.max_retries and (timed_out or self._is_retryable_failure(stdio)):
                 attempts_log[-1]["retry_reason"] = "timeout" if timed_out else "retryable_failure"
                 continue
@@ -234,6 +242,8 @@ class CodexExecutor:
             )
         except subprocess.TimeoutExpired:
             return f"unknown (timeout>{self.version_timeout_seconds}s)"
+        except OSError:
+            return "unknown (codex-not-found)"
         stdio = self._merge_stdio(completed.stdout, completed.stderr)
         line = self._first_nonempty_line(stdio)
         return line or "unknown"

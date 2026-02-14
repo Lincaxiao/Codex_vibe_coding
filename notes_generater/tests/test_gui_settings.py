@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from notes_agent.gui_settings import GuiSettings, default_settings_path, load_gui_settings, save_gui_settings
 
@@ -58,6 +59,22 @@ class GuiSettingsTests(unittest.TestCase):
         self.assertTrue(settings.search_enabled)
         self.assertEqual(settings.max_changed_lines, 500)
         self.assertEqual(settings.max_changed_files, 20)
+
+    def test_load_settings_handles_os_error(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings_path.write_text("{}", encoding="utf-8")
+            with mock.patch("pathlib.Path.open", side_effect=PermissionError("denied")):
+                settings = load_gui_settings(settings_path)
+            self.assertEqual(settings, GuiSettings())
+
+    def test_save_settings_handles_os_error(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            settings = GuiSettings(course_id="c1")
+            with mock.patch("pathlib.Path.mkdir", side_effect=PermissionError("denied")):
+                saved = save_gui_settings(settings, settings_path)
+            self.assertEqual(saved, settings_path)
 
 
 if __name__ == "__main__":

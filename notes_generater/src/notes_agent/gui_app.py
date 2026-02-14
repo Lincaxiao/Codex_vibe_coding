@@ -528,7 +528,11 @@ def main() -> int:
 
             project_text = self.project_root_edit.text().strip()
             if project_text:
-                self.current_config = self.project_service.load_project_config(Path(project_text))
+                try:
+                    self.current_config = self.project_service.load_project_config(Path(project_text))
+                except (ValueError, FileNotFoundError, OSError) as exc:
+                    self._error(str(exc))
+                    return None
                 self._update_header()
                 return self.current_config
             self._error("请先创建或加载项目")
@@ -562,6 +566,8 @@ def main() -> int:
             target = self.target_lecture_edit.text().strip()
             max_lines = _safe_int(self.max_lines_edit.text().strip(), config.max_changed_lines)
             max_files = _safe_int(self.max_files_edit.text().strip(), config.max_changed_files)
+            search_enabled = self.search_check.isChecked()
+            pause_each_round = self.pause_each_round_check.isChecked()
 
             def task() -> dict[str, Any]:
                 result = self.workflow_orchestrator.run(
@@ -570,8 +576,8 @@ def main() -> int:
                     from_round=from_round,  # type: ignore[arg-type]
                     to_round=to_round,  # type: ignore[arg-type]
                     target_lectures=[target] if target else [],
-                    search_enabled=self.search_check.isChecked(),
-                    pause_after_each_round=self.pause_each_round_check.isChecked(),
+                    search_enabled=search_enabled,
+                    pause_after_each_round=pause_each_round,
                     max_changed_lines=max_lines,
                     max_changed_files=max_files,
                 )
@@ -588,6 +594,8 @@ def main() -> int:
             target = self.target_lecture_edit.text().strip()
             max_lines = _safe_int(self.max_lines_edit.text().strip(), config.max_changed_lines)
             max_files = _safe_int(self.max_files_edit.text().strip(), config.max_changed_files)
+            search_enabled = self.search_check.isChecked()
+            pause_each_round = self.pause_each_round_check.isChecked()
 
             def task() -> dict[str, Any]:
                 result = self.workflow_orchestrator.resume(
@@ -595,8 +603,8 @@ def main() -> int:
                     notes_root=config.notes_root,
                     to_round=to_round,  # type: ignore[arg-type]
                     target_lectures=[target] if target else [],
-                    search_enabled=self.search_check.isChecked(),
-                    pause_after_each_round=self.pause_each_round_check.isChecked(),
+                    search_enabled=search_enabled,
+                    pause_after_each_round=pause_each_round,
                     max_changed_lines=max_lines,
                     max_changed_files=max_files,
                 )

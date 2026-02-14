@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .check_runner import CheckRunner
 from .codex_executor import CodexExecutor, CodexRunRequest
@@ -33,6 +34,24 @@ def _path_component_arg(field_name: str) -> Callable[[str], str]:
             raise argparse.ArgumentTypeError(str(exc)) from exc
 
     return _parse
+
+
+def _read_text_file(path: Path, *, field_name: str) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"failed to read {field_name}: {path} ({exc})") from exc
+
+
+def _read_json_object_file(path: Path, *, field_name: str) -> dict[str, Any]:
+    text = _read_text_file(path, field_name=field_name)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field_name} is not valid JSON: {path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{field_name} must be a JSON object: {path}")
+    return payload
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -285,15 +304,22 @@ def main() -> int:
         return 0
 
     if args.command == "snapshot-sources":
-        lecture_mapping = None
-        if args.lecture_mapping_file:
-            lecture_mapping = json.loads(args.lecture_mapping_file.read_text(encoding="utf-8"))
-        result = snapshot_service.create_snapshot(
-            project_root=args.project_root,
-            sources=args.sources,
-            lecture_mapping=lecture_mapping,
-            snapshot_id=args.snapshot_id,
-        )
+        try:
+            lecture_mapping = None
+            if args.lecture_mapping_file:
+                lecture_mapping = _read_json_object_file(
+                    args.lecture_mapping_file,
+                    field_name="lecture_mapping_file",
+                )
+            result = snapshot_service.create_snapshot(
+                project_root=args.project_root,
+                sources=args.sources,
+                lecture_mapping=lecture_mapping,
+                snapshot_id=args.snapshot_id,
+            )
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
+            return 2
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
         return 0
 
@@ -303,10 +329,14 @@ def main() -> int:
         return 0 if result.valid else 1
 
     if args.command == "run-codex":
-        if args.prompt:
-            prompt_text = args.prompt
-        else:
-            prompt_text = args.prompt_file.read_text(encoding="utf-8")
+        try:
+            if args.prompt:
+                prompt_text = args.prompt
+            else:
+                prompt_text = _read_text_file(args.prompt_file, field_name="prompt_file")
+        except ValueError as exc:
+            print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
+            return 2
 
         notes_root = args.notes_root
         if not notes_root:
@@ -325,7 +355,7 @@ def main() -> int:
                     max_retries=args.max_retries,
                 )
             )
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
             return 2
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
@@ -351,7 +381,7 @@ def main() -> int:
         }
 
         if not args.skip_check:
-            run_id = f"round0_{datetime.now(tz=timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+            run_id = f"round0_{datetime.now(tz=timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
             run_dir = Path(args.project_root).expanduser().resolve() / "runs" / run_id
             run_dir.mkdir(parents=True, exist_ok=False)
             check_result = check_runner.run(

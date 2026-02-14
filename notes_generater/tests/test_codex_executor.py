@@ -212,6 +212,32 @@ class CodexExecutorTests(unittest.TestCase):
         manifest = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
         self.assertIn("unknown (timeout>", manifest["codex_cli_version"])
 
+    def test_codex_not_found_returns_failed_result(self) -> None:
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            if cmd[:2] == ["codex", "--version"]:
+                raise FileNotFoundError("codex not found")
+            if cmd[0] == "codex" and "exec" in cmd:
+                raise FileNotFoundError("codex not found")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        with mock.patch("notes_agent.codex_executor.subprocess.run", side_effect=fake_run):
+            result = self.executor.run(
+                CodexRunRequest(
+                    project_root=self.project_root,
+                    notes_root=self.notes_root,
+                    prompt="缺少 codex",
+                    run_id="run_missing_codex",
+                    max_retries=2,
+                )
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.exit_code, 127)
+        self.assertEqual(result.attempts, 1)
+        self.assertIsNotNone(result.error)
+        assert result.error is not None
+        self.assertIn("failed to launch codex", result.error)
+
 
 if __name__ == "__main__":
     unittest.main()

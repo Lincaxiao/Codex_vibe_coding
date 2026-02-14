@@ -82,7 +82,7 @@ def load_gui_settings(path: Path | None = None) -> GuiSettings:
     try:
         with target.open("r", encoding="utf-8") as fp:
             payload = json.load(fp)
-    except json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         return GuiSettings()
     if not isinstance(payload, dict):
         return GuiSettings()
@@ -91,10 +91,13 @@ def load_gui_settings(path: Path | None = None) -> GuiSettings:
 
 def save_gui_settings(settings: GuiSettings, path: Path | None = None) -> Path:
     target = path or default_settings_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = target.with_suffix(target.suffix + ".tmp")
-    with temp_path.open("w", encoding="utf-8") as fp:
-        json.dump(settings.to_dict(), fp, indent=2, ensure_ascii=False, sort_keys=True)
-        fp.write("\n")
-    temp_path.replace(target)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = target.with_suffix(target.suffix + ".tmp")
+        with temp_path.open("w", encoding="utf-8") as fp:
+            json.dump(settings.to_dict(), fp, indent=2, ensure_ascii=False, sort_keys=True)
+            fp.write("\n")
+        temp_path.replace(target)
+    except OSError:
+        return target
     return target

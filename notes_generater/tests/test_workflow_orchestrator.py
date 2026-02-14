@@ -455,6 +455,73 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "succeeded")
 
+    def test_run_fails_when_snapshot_hashes_invalid(self) -> None:
+        source_hashes_path = self.config.project_root / "artifacts" / "source_hashes.json"
+        source_hashes_path.parent.mkdir(parents=True, exist_ok=True)
+        source_hashes_path.write_text(
+            json.dumps(
+                {
+                    "snapshot_id": "snap-invalid",
+                    "files": {"../escape.txt": "deadbeef"},
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            workflow_run_id="wf_snapshot_invalid",
+        )
+        self.assertEqual(result.status, "failed_recoverable")
+        self.assertEqual(result.rounds[0].status, "failed")
+        self.assertIn("snapshot hash verification failed", result.rounds[0].error or "")
+
+    def test_non_final_round_forces_search_disabled(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True)
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            workflow_run_id="wf_search_round1",
+            search_enabled=True,
+            allow_external_refs=True,
+        )
+        self.assertFalse(fake_executor.calls[0].search_enabled)
+
+    def test_final_round_allows_search_when_external_refs_enabled(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True)
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="final",
+            to_round="final",
+            workflow_run_id="wf_search_final",
+            search_enabled=True,
+            allow_external_refs=True,
+        )
+        self.assertTrue(fake_executor.calls[0].search_enabled)
+
 
 if __name__ == "__main__":
     unittest.main()

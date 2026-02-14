@@ -13,6 +13,7 @@ from .diff_service import DiffService, DiffSummary
 from .path_utils import validate_path_component
 from .project_service import ProjectService
 from .round0_initializer import Round0Initializer
+from .snapshot_service import SnapshotService
 
 RoundName = Literal["round0", "round1", "round2", "round3", "final"]
 RUN_ORDER: list[RoundName] = ["round0", "round1", "round2", "round3", "final"]
@@ -90,12 +91,14 @@ class WorkflowOrchestrator:
         check_runner: CheckRunner | None = None,
         round0_initializer: Round0Initializer | None = None,
         diff_service: DiffService | None = None,
+        snapshot_service: SnapshotService | None = None,
     ) -> None:
         self.project_service = project_service or ProjectService()
         self.codex_executor = codex_executor or CodexExecutor()
         self.check_runner = check_runner or CheckRunner()
         self.round0_initializer = round0_initializer or Round0Initializer()
         self.diff_service = diff_service or DiffService()
+        self.snapshot_service = snapshot_service or SnapshotService()
 
     def run(
         self,
@@ -176,6 +179,29 @@ class WorkflowOrchestrator:
                         after_state=after_state,
                         run_dir=round_artifact_dir,
                     )
+                    snapshot_error = self._verify_snapshot_integrity_if_present(project_root=root)
+                    if snapshot_error:
+                        round_status_payload["round0"] = "failed"
+                        workflow_status = "failed_recoverable"
+                        round_results.append(
+                            RoundExecutionResult(
+                                round_name="round0",
+                                status="failed",
+                                codex_run_id=None,
+                                codex_success=None,
+                                check_passed=check_result.passed,
+                                repaired=False,
+                                check_output_path=str(check_output_path),
+                                changed_files=diff_summary.changed_files,
+                                changed_lines=diff_summary.changed_lines,
+                                patch_path=str(diff_summary.patch_path),
+                                notes_snapshot_path=str(diff_summary.notes_snapshot_path),
+                                pause_reason=None,
+                                error=snapshot_error,
+                            )
+                        )
+                        self._write_json(round_status_path, round_status_payload)
+                        break
                     if not check_result.passed:
                         round_status_payload["round0"] = "failed"
                         workflow_status = "failed_recoverable"
@@ -241,13 +267,18 @@ class WorkflowOrchestrator:
                     allow_external_refs=allow_external_refs,
                 )
                 codex_run_id = f"{workflow_id}_{round_name}"
+                round_search_enabled = self._resolve_search_enabled(
+                    round_name=round_name,
+                    search_enabled=search_enabled,
+                    allow_external_refs=allow_external_refs,
+                )
                 codex_result = self.codex_executor.run(
                     CodexRunRequest(
                         project_root=root,
                         notes_root=notes,
                         prompt=prompt,
                         run_id=codex_run_id,
-                        search_enabled=search_enabled,
+                        search_enabled=round_search_enabled,
                         max_retries=max_retries,
                     )
                 )
@@ -276,7 +307,7 @@ class WorkflowOrchestrator:
                                 notes_root=notes,
                                 prompt=repair_prompt,
                                 run_id=repair_run_id,
-                                search_enabled=search_enabled,
+                                search_enabled=round_search_enabled,
                                 max_retries=max_retries,
                             )
                         )
@@ -298,6 +329,30 @@ class WorkflowOrchestrator:
                     after_state=after_state,
                     run_dir=round_artifact_dir,
                 )
+                snapshot_error = self._verify_snapshot_integrity_if_present(project_root=root)
+                if snapshot_error:
+                    check_path = final_run.run_dir / "check_result.json"
+                    round_status_payload[round_name] = "failed"
+                    workflow_status = "failed_recoverable"
+                    round_results.append(
+                        RoundExecutionResult(
+                            round_name=round_name,
+                            status="failed",
+                            codex_run_id=final_run.run_id,
+                            codex_success=final_run.success,
+                            check_passed=check_result.passed if check_result is not None else None,
+                            repaired=repaired,
+                            check_output_path=str(check_path) if check_path.exists() else None,
+                            changed_files=diff_summary.changed_files,
+                            changed_lines=diff_summary.changed_lines,
+                            patch_path=str(diff_summary.patch_path),
+                            notes_snapshot_path=str(diff_summary.notes_snapshot_path),
+                            pause_reason=None,
+                            error=snapshot_error,
+                        )
+                    )
+                    self._write_json(round_status_path, round_status_payload)
+                    break
 
                 if not final_run.success:
                     round_status_payload[round_name] = "failed"
@@ -622,6 +677,30 @@ class WorkflowOrchestrator:
         if pause_after_round:
             return "pause_after_each_round enabled"
         return None
+
+    def _resolve_search_enabled(
+        self,
+        *,
+        round_name: RoundName,
+        search_enabled: bool,
+        allow_external_refs: bool,
+    ) -> bool:
+        return search_enabled and allow_external_refs and round_name == "final"
+
+    def _verify_snapshot_integrity_if_present(self, *, project_root: Path) -> str | None:
+        source_hashes_path = project_root / "artifacts" / "source_hashes.json"
+        if not source_hashes_path.exists():
+            return None
+        verification = self.snapshot_service.verify_snapshot_hashes(project_root=project_root)
+        if verification.valid:
+            return None
+        if not verification.mismatches:
+            return f"snapshot hash verification failed ({verification.snapshot_id})"
+        first = verification.mismatches[0]
+        return (
+            "snapshot hash verification failed: "
+            f"{first.get('reason', 'unknown')} @ {first.get('path', '')}"
+        )
 
     def _read_json(self, path: Path) -> dict[str, Any]:
         try:
