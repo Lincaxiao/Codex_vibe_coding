@@ -168,6 +168,32 @@ class SnapshotServiceTests(unittest.TestCase):
         self.assertEqual(verified.checked_files, 0)
         self.assertEqual(verified.mismatches[0]["reason"], "invalid_metadata")
 
+    def test_verify_snapshot_handles_metadata_path_as_directory(self) -> None:
+        project_root = self._create_project()
+        source_hashes_path = project_root / "artifacts" / "source_hashes.json"
+        source_hashes_path.mkdir(parents=True, exist_ok=True)
+
+        verified = self.snapshot_service.verify_snapshot_hashes(project_root=project_root)
+        self.assertFalse(verified.valid)
+        self.assertEqual(verified.checked_files, 0)
+        self.assertEqual(verified.mismatches[0]["reason"], "invalid_metadata")
+
+    def test_create_snapshot_rejects_symlink_in_source_tree(self) -> None:
+        project_root = self._create_project()
+        source_dir = self.tmp_path / "sources" / "pkg"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        target_file = self.tmp_path / "outside.txt"
+        target_file.write_text("outside\n", encoding="utf-8")
+        symlink_path = source_dir / "outside_link.txt"
+        os.symlink(target_file, symlink_path)
+
+        with self.assertRaisesRegex(ValueError, "symlink inside source is not allowed"):
+            self.snapshot_service.create_snapshot(
+                project_root=project_root,
+                sources=[source_dir],
+                snapshot_id="snap-symlink",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

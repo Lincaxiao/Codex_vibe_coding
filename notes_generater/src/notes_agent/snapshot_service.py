@@ -89,6 +89,7 @@ class SnapshotService:
         for source in resolved_sources:
             if not source.exists():
                 raise FileNotFoundError(f"source not found: {source}")
+            self._assert_no_symlink(source)
 
         snapshot_key = (
             validate_path_component(snapshot_id, field_name="snapshot_id")
@@ -127,7 +128,8 @@ class SnapshotService:
             dest_path = snapshot_root / dest_name
             source_type = "dir" if source.is_dir() else "file"
             if source.is_dir():
-                shutil.copytree(source, dest_path, dirs_exist_ok=False)
+                # Symlinks are rejected up front via _assert_no_symlink; use explicit follow behavior here.
+                shutil.copytree(source, dest_path, dirs_exist_ok=False, symlinks=False)
             else:
                 shutil.copy2(source, dest_path)
 
@@ -178,6 +180,20 @@ class SnapshotService:
                     {
                         "path": str(source_hashes_path),
                         "reason": "missing_metadata",
+                        "expected": "",
+                        "actual": "",
+                    }
+                ],
+            )
+        if not source_hashes_path.is_file():
+            return SnapshotVerificationResult(
+                snapshot_id="unknown",
+                valid=False,
+                checked_files=0,
+                mismatches=[
+                    {
+                        "path": str(source_hashes_path),
+                        "reason": "invalid_metadata",
                         "expected": "",
                         "actual": "",
                     }
@@ -271,11 +287,23 @@ class SnapshotService:
             else:
                 os.chmod(dir_path, 0o444)
 
+    def _assert_no_symlink(self, source: Path) -> None:
+        if source.is_symlink():
+            raise ValueError(f"source symlink is not allowed: {source}")
+        if source.is_file():
+            return
+        for dir_path, dir_names, file_names in os.walk(source, topdown=True, followlinks=False):
+            directory = Path(dir_path)
+            for name in [*dir_names, *file_names]:
+                candidate = directory / name
+                if candidate.is_symlink():
+                    raise ValueError(f"symlink inside source is not allowed: {candidate}")
+
     def _read_json(self, path: Path) -> dict[str, Any]:
         try:
             with path.open("r", encoding="utf-8") as fp:
                 payload = json.load(fp)
-        except json.JSONDecodeError:
+        except (OSError, json.JSONDecodeError):
             return {}
         if isinstance(payload, dict):
             return payload

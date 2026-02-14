@@ -500,16 +500,20 @@ def main() -> int:
                 self._error("工作区目录和课程标识不能为空")
                 return
 
-            workspace_root = Path(workspace_text).expanduser().resolve()
-            course_id = slugify_course_id(course_text)
-            project_root = workspace_root / "projects" / course_id
-            if (project_root / "project.yaml").exists():
-                config = self.project_service.load_project_config(project_root)
-            else:
-                config = self.project_service.create_project(
-                    CreateProjectRequest(course_id=course_id, workspace_root=workspace_root),
-                    allow_existing=True,
-                )
+            try:
+                workspace_root = Path(workspace_text).expanduser().resolve()
+                course_id = slugify_course_id(course_text)
+                project_root = workspace_root / "projects" / course_id
+                if (project_root / "project.yaml").exists():
+                    config = self.project_service.load_project_config(project_root)
+                else:
+                    config = self.project_service.create_project(
+                        CreateProjectRequest(course_id=course_id, workspace_root=workspace_root),
+                        allow_existing=True,
+                    )
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                self._error(str(exc))
+                return
 
             self.current_config = config
             self.project_root_edit.setText(str(config.project_root))

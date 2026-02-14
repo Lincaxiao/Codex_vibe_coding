@@ -459,6 +459,9 @@ class WorkflowOrchestrator:
             session_payload["current_run_id"] = None
             session_payload["updated_at"] = now
             self._write_json(session_path, session_payload)
+            if str(round_status.get("final", "")) == "paused":
+                round_status["final"] = "completed"
+                self._write_json(round_status_path, round_status)
 
             done_id = (
                 validate_path_component(workflow_run_id, field_name="workflow_run_id")
@@ -524,7 +527,7 @@ class WorkflowOrchestrator:
             if status == "paused":
                 next_idx = idx + 1
                 if next_idx >= len(RUN_ORDER):
-                    return round_name
+                    return None
                 return RUN_ORDER[next_idx]
         return None
 

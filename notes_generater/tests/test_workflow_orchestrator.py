@@ -403,7 +403,7 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 workflow_run_id="../wf_escape",
             )
 
-    def test_resume_when_final_paused_restarts_final_round(self) -> None:
+    def test_resume_when_final_paused_converges_without_rerun(self) -> None:
         round_status_path = self.config.project_root / "state" / "round_status.json"
         round_status_path.write_text(
             json.dumps(
@@ -432,8 +432,10 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             to_round="final",
             workflow_run_id="wf_resume_final_paused",
         )
-        self.assertTrue(result.rounds)
-        self.assertEqual(result.rounds[0].round_name, "final")
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(result.rounds, [])
+        round_status = json.loads(round_status_path.read_text(encoding="utf-8"))
+        self.assertEqual(round_status["final"], "completed")
 
     def test_run_tolerates_corrupted_state_json(self) -> None:
         (self.config.project_root / "state" / "session.json").write_text("{broken\n", encoding="utf-8")

@@ -7,6 +7,20 @@ from typing import Any, Literal
 ReviewGranularity = Literal["section", "lecture"]
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", ""}:
+            return False
+    return default
+
+
 @dataclass(frozen=True)
 class CreateProjectRequest:
     course_id: str
@@ -63,7 +77,7 @@ class ProjectConfig:
             language=str(data.get("language", "zh-CN")),
             review_granularity=str(data.get("review_granularity", "lecture")),  # type: ignore[arg-type]
             human_review_timing=str(data.get("human_review_timing", "final_only")),
-            pause_after_each_round=bool(data.get("pause_after_each_round", False)),
+            pause_after_each_round=_as_bool(data.get("pause_after_each_round", False), False),
             max_changed_lines=int(data.get("max_changed_lines", 500)),
             max_changed_files=int(data.get("max_changed_files", 20)),
             network_mode=str(data.get("network_mode", "disabled_by_default")),
