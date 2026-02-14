@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .check_runner import CheckRunner
 from .codex_executor import CodexExecutor, CodexRunRequest
+from .feedback_service import FeedbackService
 from .models import CreateProjectRequest
 from .project_service import ProjectService
 from .round0_initializer import Round0Initializer
@@ -132,6 +133,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable automatic single repair run when check fails",
     )
+    workflow_parser.add_argument(
+        "--pause-after-each-round",
+        action="store_true",
+        help="Pause workflow after each successful round",
+    )
+    workflow_parser.add_argument(
+        "--max-changed-lines",
+        type=int,
+        help="Override changed lines threshold for auto pause; use -1 to disable",
+    )
+    workflow_parser.add_argument(
+        "--max-changed-files",
+        type=int,
+        help="Override changed files threshold for auto pause; use -1 to disable",
+    )
+
+    feedback_parser = subparsers.add_parser("add-feedback", help="Append review feedback items")
+    feedback_parser.add_argument("--project-root", required=True, type=Path)
+    feedback_parser.add_argument("--notes-root", type=Path, help="Optional override; defaults to project config")
+    feedback_parser.add_argument(
+        "--item",
+        dest="items",
+        action="append",
+        required=True,
+        help="Feedback checklist item (repeatable)",
+    )
+    feedback_parser.add_argument("--title", help="Optional section title")
+    feedback_parser.add_argument("--author", help="Optional feedback author")
     return parser
 
 
@@ -143,6 +172,7 @@ def main() -> int:
     codex_executor = CodexExecutor()
     round0_initializer = Round0Initializer()
     check_runner = CheckRunner()
+    feedback_service = FeedbackService()
     workflow_orchestrator = WorkflowOrchestrator(
         project_service=service,
         codex_executor=codex_executor,
@@ -270,9 +300,24 @@ def main() -> int:
             max_retries=args.max_retries,
             workflow_run_id=args.workflow_run_id,
             auto_repair_check_failures=not args.disable_auto_repair,
+            pause_after_each_round=args.pause_after_each_round if args.pause_after_each_round else None,
+            max_changed_lines=args.max_changed_lines,
+            max_changed_files=args.max_changed_files,
         )
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
-        return 0 if result.status == "succeeded" else 1
+        return 0 if result.status in {"succeeded", "paused"} else 1
+
+    if args.command == "add-feedback":
+        config = service.load_project_config(args.project_root)
+        notes_root = args.notes_root or config.notes_root
+        result = feedback_service.append_feedback(
+            notes_root=notes_root,
+            items=args.items,
+            section_title=args.title,
+            author=args.author,
+        )
+        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        return 0
 
     parser.error(f"unsupported command: {args.command}")
     return 2

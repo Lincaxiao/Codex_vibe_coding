@@ -14,9 +14,15 @@ from notes_agent.workflow_orchestrator import WorkflowOrchestrator
 
 
 class FakeCodexExecutor:
-    def __init__(self, success_by_run_id: dict[str, bool] | None = None, default_success: bool = True) -> None:
+    def __init__(
+        self,
+        success_by_run_id: dict[str, bool] | None = None,
+        default_success: bool = True,
+        mutate_rel_path: str | None = None,
+    ) -> None:
         self.success_by_run_id = success_by_run_id or {}
         self.default_success = default_success
+        self.mutate_rel_path = mutate_rel_path
         self.calls: list[CodexRunRequest] = []
 
     def run(self, request: CodexRunRequest) -> CodexRunResult:
@@ -35,6 +41,11 @@ class FakeCodexExecutor:
         run_manifest_path.write_text("{}", encoding="utf-8")
 
         success = self.success_by_run_id.get(run_id, self.default_success)
+        if success and self.mutate_rel_path:
+            target = request.notes_root / self.mutate_rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            existing = target.read_text(encoding="utf-8") if target.exists() else ""
+            target.write_text(existing + f"变更-{run_id}\n", encoding="utf-8")
         return CodexRunResult(
             run_id=run_id,
             run_dir=run_dir,
@@ -163,6 +174,53 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertTrue(result.rounds[0].repaired)
         self.assertEqual(result.rounds[0].codex_run_id, "wf_repair_round1_repair1")
         self.assertEqual(len(fake_executor.calls), 2)
+        self.assertTrue(result.rounds[0].changed_files >= 0)
+
+    def test_pause_when_changed_lines_exceed_threshold(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True, mutate_rel_path="notes/lectures/lecture01.md")
+        fake_check = FakeCheckRunner(outcomes=[True])
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=fake_check,  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            workflow_run_id="wf_pause_threshold",
+            max_changed_lines=0,
+        )
+
+        self.assertEqual(result.status, "paused")
+        self.assertEqual(len(result.rounds), 1)
+        self.assertEqual(result.rounds[0].status, "paused")
+        self.assertIsNotNone(result.rounds[0].pause_reason)
+
+    def test_pause_after_each_round(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True)
+        fake_check = FakeCheckRunner(outcomes=[True])
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=fake_check,  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round3",
+            workflow_run_id="wf_pause_each",
+            pause_after_each_round=True,
+        )
+
+        self.assertEqual(result.status, "paused")
+        self.assertEqual(len(result.rounds), 1)
+        self.assertEqual(result.rounds[0].round_name, "round1")
+        self.assertEqual(result.rounds[0].status, "paused")
 
     def test_round0_only_workflow(self) -> None:
         fake_executor = FakeCodexExecutor(default_success=True)

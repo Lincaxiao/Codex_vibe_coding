@@ -1,5 +1,7 @@
 from .check_runner import CheckRunResult, CheckRunner
 from .codex_executor import CodexExecutor, CodexRunRequest, CodexRunResult
+from .diff_service import DiffService, DiffSummary
+from .feedback_service import FeedbackAppendResult, FeedbackService
 from .models import CreateProjectRequest, ProjectConfig
 from .project_service import ProjectService, slugify_course_id
 from .round0_initializer import Round0InitResult, Round0Initializer
@@ -12,7 +14,11 @@ __all__ = [
     "CodexExecutor",
     "CodexRunRequest",
     "CodexRunResult",
+    "DiffService",
+    "DiffSummary",
     "CreateProjectRequest",
+    "FeedbackAppendResult",
+    "FeedbackService",
     "ProjectConfig",
     "ProjectService",
     "Round0InitResult",
