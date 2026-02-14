@@ -420,6 +420,33 @@ def main() -> int:
                     padding: 7px 9px;
                     selection-background-color: #0f766e;
                 }
+                QComboBox {
+                    padding-right: 28px;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                    width: 24px;
+                    border-top-right-radius: 8px;
+                    border-bottom-right-radius: 8px;
+                }
+                QComboBox QAbstractItemView {
+                    background: #fffdf9;
+                    border: 1px solid #d4c5b1;
+                    border-radius: 8px;
+                    padding: 4px;
+                    outline: 0;
+                    selection-background-color: #0f766e;
+                    selection-color: #ffffff;
+                }
+                QComboBox QAbstractItemView::item {
+                    border-radius: 6px;
+                    padding: 7px 10px;
+                    margin: 2px 0;
+                }
+                QComboBox QAbstractItemView::item:selected {
+                    background: #0f766e;
+                    color: #ffffff;
+                }
                 QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {
                     border-color: #0f766e;
                 }
