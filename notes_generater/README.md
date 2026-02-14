@@ -26,6 +26,8 @@ PYTHONPATH=src python3 -m notes_agent.cli list-projects --workspace-root "/path/
 PYTHONPATH=src python3 -m notes_agent.cli show-project --project-root "/path/to/workspace/projects/cs-61a"
 PYTHONPATH=src python3 -m notes_agent.cli snapshot-sources --project-root "/path/to/workspace/projects/cs-61a" --source "/path/to/slides" --source "/path/to/code"
 PYTHONPATH=src python3 -m notes_agent.cli verify-snapshot --project-root "/path/to/workspace/projects/cs-61a"
+PYTHONPATH=src python3 -m notes_agent.cli init-round0 --project-root "/path/to/workspace/projects/cs-61a"
+PYTHONPATH=src python3 -m notes_agent.cli run-check --project-root "/path/to/workspace/projects/cs-61a"
 PYTHONPATH=src python3 -m notes_agent.cli run-codex --project-root "/path/to/workspace/projects/cs-61a" --prompt "请列出当前目录文件"
 ```
 

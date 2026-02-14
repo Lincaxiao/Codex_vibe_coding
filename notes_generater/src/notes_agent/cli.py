@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
+from .check_runner import CheckRunner
 from .codex_executor import CodexExecutor, CodexRunRequest
 from .models import CreateProjectRequest
 from .project_service import ProjectService
+from .round0_initializer import Round0Initializer
 from .snapshot_service import SnapshotService
 
 
@@ -67,6 +70,27 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--model", help="Optional model override")
     run_parser.add_argument("--search", action="store_true", help="Enable codex web search")
     run_parser.add_argument("--max-retries", type=int, default=2, help="Retry count for retryable failures")
+
+    init_round0_parser = subparsers.add_parser(
+        "init-round0", help="Initialize notes_root scaffold and check scripts"
+    )
+    init_round0_parser.add_argument("--project-root", required=True, type=Path)
+    init_round0_parser.add_argument("--notes-root", type=Path, help="Optional override; defaults to project config")
+    init_round0_parser.add_argument("--force", action="store_true", help="Overwrite existing template files")
+    init_round0_parser.add_argument(
+        "--disable-flashcards",
+        action="store_true",
+        help="Do not create notes/flashcards.csv",
+    )
+    init_round0_parser.add_argument(
+        "--skip-check",
+        action="store_true",
+        help="Only scaffold files, do not run check script",
+    )
+
+    run_check_parser = subparsers.add_parser("run-check", help="Run notes_root/scripts/check.sh")
+    run_check_parser.add_argument("--project-root", required=True, type=Path)
+    run_check_parser.add_argument("--notes-root", type=Path, help="Optional override; defaults to project config")
     return parser
 
 
@@ -76,6 +100,8 @@ def main() -> int:
     service = ProjectService()
     snapshot_service = SnapshotService()
     codex_executor = CodexExecutor()
+    round0_initializer = Round0Initializer()
+    check_runner = CheckRunner()
 
     if args.command == "create-project":
         request = CreateProjectRequest(
@@ -141,6 +167,49 @@ def main() -> int:
         )
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
         return 0 if result.success else 1
+
+    if args.command == "init-round0":
+        config = service.load_project_config(args.project_root)
+        notes_root = args.notes_root or config.notes_root
+
+        init_result = round0_initializer.initialize(
+            project_root=args.project_root,
+            notes_root=notes_root,
+            course_id=config.course_id,
+            force=args.force,
+            enable_flashcards=not args.disable_flashcards,
+        )
+
+        response: dict[str, object] = {
+            "round": "round0",
+            "project_root": str(Path(args.project_root).expanduser().resolve()),
+            "notes_root": str(Path(notes_root).expanduser().resolve()),
+            "scaffold": init_result.to_dict(),
+        }
+
+        if not args.skip_check:
+            run_id = f"round0_{datetime.now(tz=timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+            run_dir = Path(args.project_root).expanduser().resolve() / "runs" / run_id
+            run_dir.mkdir(parents=True, exist_ok=False)
+            check_result = check_runner.run(
+                project_root=args.project_root,
+                notes_root=notes_root,
+                output_path=run_dir / "check_result.json",
+            )
+            response["run_id"] = run_id
+            response["check"] = check_result.to_dict()
+            print(json.dumps(response, indent=2, ensure_ascii=False))
+            return 0 if check_result.passed else 1
+
+        print(json.dumps(response, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.command == "run-check":
+        config = service.load_project_config(args.project_root)
+        notes_root = args.notes_root or config.notes_root
+        check_result = check_runner.run(project_root=args.project_root, notes_root=notes_root)
+        print(json.dumps(check_result.to_dict(), indent=2, ensure_ascii=False))
+        return 0 if check_result.passed else 1
 
     parser.error(f"unsupported command: {args.command}")
     return 2
