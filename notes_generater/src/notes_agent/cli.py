@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .codex_executor import CodexExecutor, CodexRunRequest
 from .models import CreateProjectRequest
 from .project_service import ProjectService
 from .snapshot_service import SnapshotService
@@ -53,6 +54,19 @@ def build_parser() -> argparse.ArgumentParser:
         "verify-snapshot", help="Verify snapshot hashes from artifacts/source_hashes.json"
     )
     verify_snapshot_parser.add_argument("--project-root", required=True, type=Path)
+
+    run_parser = subparsers.add_parser(
+        "run-codex", help="Run one codex exec round and persist prompt/stdout/manifest"
+    )
+    run_parser.add_argument("--project-root", required=True, type=Path)
+    run_parser.add_argument("--notes-root", type=Path, help="Optional override; defaults to project config")
+    prompt_group = run_parser.add_mutually_exclusive_group(required=True)
+    prompt_group.add_argument("--prompt", help="Prompt text")
+    prompt_group.add_argument("--prompt-file", type=Path, help="Prompt file path")
+    run_parser.add_argument("--run-id", help="Optional run_id override")
+    run_parser.add_argument("--model", help="Optional model override")
+    run_parser.add_argument("--search", action="store_true", help="Enable codex web search")
+    run_parser.add_argument("--max-retries", type=int, default=2, help="Retry count for retryable failures")
     return parser
 
 
@@ -61,6 +75,7 @@ def main() -> int:
     args = parser.parse_args()
     service = ProjectService()
     snapshot_service = SnapshotService()
+    codex_executor = CodexExecutor()
 
     if args.command == "create-project":
         request = CreateProjectRequest(
@@ -101,6 +116,31 @@ def main() -> int:
         result = snapshot_service.verify_snapshot_hashes(project_root=args.project_root)
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
         return 0 if result.valid else 1
+
+    if args.command == "run-codex":
+        if args.prompt:
+            prompt_text = args.prompt
+        else:
+            prompt_text = args.prompt_file.read_text(encoding="utf-8")
+
+        notes_root = args.notes_root
+        if not notes_root:
+            config = service.load_project_config(args.project_root)
+            notes_root = config.notes_root
+
+        result = codex_executor.run(
+            CodexRunRequest(
+                project_root=args.project_root,
+                notes_root=notes_root,
+                prompt=prompt_text,
+                run_id=args.run_id,
+                model=args.model,
+                search_enabled=args.search,
+                max_retries=args.max_retries,
+            )
+        )
+        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        return 0 if result.success else 1
 
     parser.error(f"unsupported command: {args.command}")
     return 2
