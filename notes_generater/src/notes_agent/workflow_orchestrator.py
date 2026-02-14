@@ -291,7 +291,7 @@ class WorkflowOrchestrator:
                     notes_root=notes,
                     before_state=before_state,
                     after_state=after_state,
-                    run_dir=final_run.run_dir,
+                    run_dir=round_artifact_dir,
                 )
 
                 if not final_run.success:
@@ -447,14 +447,22 @@ class WorkflowOrchestrator:
         round_status = self._read_json(round_status_path)
         from_round = self._resolve_resume_from_round(round_status=round_status)
         if from_round is None:
+            session_path = root / "state" / "session.json"
+            session_payload = self._read_json(session_path)
+            now = _now_iso()
+            session_payload["status"] = "idle"
+            session_payload["current_run_id"] = None
+            session_payload["updated_at"] = now
+            self._write_json(session_path, session_payload)
+
             done_id = workflow_run_id or _default_workflow_run_id()
             done_dir = root / "runs" / done_id
             done_dir.mkdir(parents=True, exist_ok=False)
             result = WorkflowRunResult(
                 workflow_run_id=done_id,
                 status="succeeded",
-                started_at=_now_iso(),
-                finished_at=_now_iso(),
+                started_at=now,
+                finished_at=now,
                 rounds=[],
                 workflow_result_path=done_dir / "workflow_result.json",
             )

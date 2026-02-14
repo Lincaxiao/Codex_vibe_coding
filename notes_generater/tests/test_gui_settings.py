@@ -39,6 +39,15 @@ class GuiSettingsTests(unittest.TestCase):
             self.assertTrue(str(path).startswith(tmp))
             self.assertEqual(path.name, "settings.json")
 
+    def test_from_dict_parses_boolean_strings(self) -> None:
+        payload = {
+            "pause_after_each_round": "false",
+            "search_enabled": "true",
+        }
+        settings = GuiSettings.from_dict(payload)
+        self.assertFalse(settings.pause_after_each_round)
+        self.assertTrue(settings.search_enabled)
+
 
 if __name__ == "__main__":
     unittest.main()

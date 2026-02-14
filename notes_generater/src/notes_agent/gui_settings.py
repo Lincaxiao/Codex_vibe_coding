@@ -9,6 +9,20 @@ SETTINGS_DIR_NAME = ".notes_agent_gui"
 SETTINGS_FILE_NAME = "settings.json"
 
 
+def _as_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", ""}:
+            return False
+    return default
+
+
 @dataclass(frozen=True)
 class GuiSettings:
     workspace_root: str = ""
@@ -44,8 +58,8 @@ class GuiSettings:
             to_round=str(payload.get("to_round", "round1")),
             max_changed_lines=int(payload.get("max_changed_lines", 500)),
             max_changed_files=int(payload.get("max_changed_files", 20)),
-            pause_after_each_round=bool(payload.get("pause_after_each_round", False)),
-            search_enabled=bool(payload.get("search_enabled", False)),
+            pause_after_each_round=_as_bool(payload.get("pause_after_each_round", False), False),
+            search_enabled=_as_bool(payload.get("search_enabled", False), False),
         )
 
 
