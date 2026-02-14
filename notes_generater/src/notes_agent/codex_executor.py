@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .path_utils import validate_path_component
+
 
 def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
@@ -64,7 +66,11 @@ class CodexExecutor:
 
         project_root = request.project_root.expanduser().resolve()
         notes_root = request.notes_root.expanduser().resolve()
-        run_id = request.run_id or _default_run_id()
+        run_id = (
+            validate_path_component(request.run_id, field_name="run_id")
+            if request.run_id is not None
+            else _default_run_id()
+        )
         run_dir = project_root / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=False)
 

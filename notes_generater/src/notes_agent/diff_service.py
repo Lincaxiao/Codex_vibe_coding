@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from difflib import unified_diff
@@ -40,9 +41,7 @@ class DiffService:
             return {}
 
         state: dict[str, str] = {}
-        for path in sorted(root.rglob("*")):
-            if not path.is_file():
-                continue
+        for path in self._iter_safe_files(root):
             rel = str(path.relative_to(root))
             state[rel] = path.read_text(encoding="utf-8", errors="replace")
         return state
@@ -96,8 +95,8 @@ class DiffService:
         notes_snapshot_path.mkdir(parents=True, exist_ok=True)
         deleted_files: list[str] = []
         for rel in changed_paths:
-            src = notes / rel
-            if src.exists() and src.is_file():
+            src = self._resolve_safe_child(root=notes, relative_path=rel)
+            if src is not None and src.exists() and src.is_file():
                 dst = notes_snapshot_path / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dst)
@@ -123,3 +122,39 @@ class DiffService:
             encoding="utf-8",
         )
         return summary
+
+    def _iter_safe_files(self, root: Path) -> list[Path]:
+        files: list[Path] = []
+        for dir_path, dir_names, file_names in os.walk(root, topdown=True, followlinks=False):
+            directory = Path(dir_path)
+            dir_names[:] = sorted(dir_names)
+            for file_name in sorted(file_names):
+                path = directory / file_name
+                if path.is_symlink():
+                    continue
+                resolved = path.resolve()
+                if not self._is_within(resolved, root):
+                    continue
+                files.append(path)
+        return files
+
+    def _resolve_safe_child(self, *, root: Path, relative_path: str) -> Path | None:
+        rel = Path(relative_path)
+        if rel.is_absolute():
+            return None
+        if any(part in {"", ".", ".."} for part in rel.parts):
+            return None
+        child = root / rel
+        if child.is_symlink():
+            return None
+        resolved = child.resolve()
+        if not self._is_within(resolved, root):
+            return None
+        return child
+
+    def _is_within(self, candidate: Path, root: Path) -> bool:
+        try:
+            candidate.relative_to(root)
+            return True
+        except ValueError:
+            return False

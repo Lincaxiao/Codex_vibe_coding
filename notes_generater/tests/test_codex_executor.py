@@ -141,6 +141,19 @@ class CodexExecutorTests(unittest.TestCase):
                 )
         mock_run.assert_not_called()
 
+    def test_run_id_path_traversal_rejected(self) -> None:
+        with mock.patch("notes_agent.codex_executor.subprocess.run") as mock_run:
+            with self.assertRaisesRegex(ValueError, "run_id must be a single path component"):
+                self.executor.run(
+                    CodexRunRequest(
+                        project_root=self.project_root,
+                        notes_root=self.notes_root,
+                        prompt="测试",
+                        run_id="../escape",
+                    )
+                )
+        mock_run.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

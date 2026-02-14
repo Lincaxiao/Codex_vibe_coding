@@ -10,6 +10,7 @@ from typing import Any, Literal
 from .check_runner import CheckRunResult, CheckRunner
 from .codex_executor import CodexExecutor, CodexRunRequest, CodexRunResult
 from .diff_service import DiffService, DiffSummary
+from .path_utils import validate_path_component
 from .project_service import ProjectService
 from .round0_initializer import Round0Initializer
 
@@ -122,7 +123,11 @@ class WorkflowOrchestrator:
         pause_after_round = config.pause_after_each_round if pause_after_each_round is None else pause_after_each_round
         changed_lines_limit = config.max_changed_lines if max_changed_lines is None else max_changed_lines
         changed_files_limit = config.max_changed_files if max_changed_files is None else max_changed_files
-        workflow_id = workflow_run_id or _default_workflow_run_id()
+        workflow_id = (
+            validate_path_component(workflow_run_id, field_name="workflow_run_id")
+            if workflow_run_id is not None
+            else _default_workflow_run_id()
+        )
         workflow_dir = root / "runs" / workflow_id
         workflow_dir.mkdir(parents=True, exist_ok=False)
 
@@ -455,7 +460,11 @@ class WorkflowOrchestrator:
             session_payload["updated_at"] = now
             self._write_json(session_path, session_payload)
 
-            done_id = workflow_run_id or _default_workflow_run_id()
+            done_id = (
+                validate_path_component(workflow_run_id, field_name="workflow_run_id")
+                if workflow_run_id is not None
+                else _default_workflow_run_id()
+            )
             done_dir = root / "runs" / done_id
             done_dir.mkdir(parents=True, exist_ok=False)
             result = WorkflowRunResult(

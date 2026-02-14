@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -62,6 +63,21 @@ class DiffServiceTests(unittest.TestCase):
         self.assertTrue(deleted_manifest.exists())
         deleted_payload = json.loads(deleted_manifest.read_text(encoding="utf-8"))
         self.assertIn("notes/lectures/b.md", deleted_payload["deleted_files"])
+
+    def test_capture_state_ignores_symlink_to_outside(self) -> None:
+        outside = self.tmp_path / "outside.txt"
+        outside.write_text("outside\n", encoding="utf-8")
+
+        safe_file = self.notes_root / "notes" / "lectures" / "safe.md"
+        safe_file.parent.mkdir(parents=True, exist_ok=True)
+        safe_file.write_text("safe\n", encoding="utf-8")
+
+        symlink_path = self.notes_root / "notes" / "lectures" / "outside_link.md"
+        os.symlink(outside, symlink_path)
+
+        state = self.service.capture_state(notes_root=self.notes_root)
+        self.assertIn("notes/lectures/safe.md", state)
+        self.assertNotIn("notes/lectures/outside_link.md", state)
 
 
 if __name__ == "__main__":

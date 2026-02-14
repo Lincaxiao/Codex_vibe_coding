@@ -4,11 +4,13 @@ import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from .check_runner import CheckRunner
 from .codex_executor import CodexExecutor, CodexRunRequest
 from .feedback_service import FeedbackService
 from .models import CreateProjectRequest
+from .path_utils import validate_path_component
 from .project_service import ProjectService
 from .run_history_service import RunHistoryService
 from .round0_initializer import Round0Initializer
@@ -21,6 +23,16 @@ def _non_negative_int(raw: str) -> int:
     if value < 0:
         raise argparse.ArgumentTypeError(f"must be >= 0, got {value}")
     return value
+
+
+def _path_component_arg(field_name: str) -> Callable[[str], str]:
+    def _parse(raw: str) -> str:
+        try:
+            return validate_path_component(raw, field_name=field_name)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from exc
+
+    return _parse
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,7 +73,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional JSON file: {\"/abs/source/path\": \"lecture_name\"}",
     )
-    snapshot_parser.add_argument("--snapshot-id", help="Optional explicit snapshot id")
+    snapshot_parser.add_argument(
+        "--snapshot-id",
+        type=_path_component_arg("snapshot_id"),
+        help="Optional explicit snapshot id",
+    )
 
     verify_snapshot_parser = subparsers.add_parser(
         "verify-snapshot", help="Verify snapshot hashes from artifacts/source_hashes.json"
@@ -76,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     prompt_group = run_parser.add_mutually_exclusive_group(required=True)
     prompt_group.add_argument("--prompt", help="Prompt text")
     prompt_group.add_argument("--prompt-file", type=Path, help="Prompt file path")
-    run_parser.add_argument("--run-id", help="Optional run_id override")
+    run_parser.add_argument("--run-id", type=_path_component_arg("run_id"), help="Optional run_id override")
     run_parser.add_argument("--model", help="Optional model override")
     run_parser.add_argument("--search", action="store_true", help="Enable codex web search")
     run_parser.add_argument(
@@ -140,7 +156,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable codex web search during workflow rounds",
     )
     workflow_parser.add_argument("--max-retries", type=_non_negative_int, default=2)
-    workflow_parser.add_argument("--workflow-run-id", help="Optional workflow run id override")
+    workflow_parser.add_argument(
+        "--workflow-run-id",
+        type=_path_component_arg("workflow_run_id"),
+        help="Optional workflow run id override",
+    )
     workflow_parser.add_argument(
         "--disable-auto-repair",
         action="store_true",
@@ -195,7 +215,11 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("--allow-external-refs", action="store_true")
     resume_parser.add_argument("--search", action="store_true")
     resume_parser.add_argument("--max-retries", type=_non_negative_int, default=2)
-    resume_parser.add_argument("--workflow-run-id", help="Optional workflow run id override")
+    resume_parser.add_argument(
+        "--workflow-run-id",
+        type=_path_component_arg("workflow_run_id"),
+        help="Optional workflow run id override",
+    )
     resume_parser.add_argument("--disable-auto-repair", action="store_true")
     resume_parser.add_argument("--pause-after-each-round", action="store_true")
     resume_parser.add_argument("--max-changed-lines", type=int)
@@ -211,7 +235,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     show_patch_parser = subparsers.add_parser("show-patch", help="Show changes.patch by run_id")
     show_patch_parser.add_argument("--project-root", required=True, type=Path)
-    show_patch_parser.add_argument("--run-id", required=True, help="Run id under project_root/runs")
+    show_patch_parser.add_argument(
+        "--run-id",
+        required=True,
+        type=_path_component_arg("run_id"),
+        help="Run id under project_root/runs",
+    )
     show_patch_parser.add_argument("--round-name", help="Optional round name for workflow runs")
     return parser
 

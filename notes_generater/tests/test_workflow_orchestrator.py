@@ -387,6 +387,22 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 workflow_run_id="wf_resume_invalid_target",
             )
 
+    def test_workflow_run_id_path_traversal_rejected(self) -> None:
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "workflow_run_id must be a single path component"):
+            orchestrator.run(
+                project_root=self.config.project_root,
+                from_round="round1",
+                to_round="round1",
+                workflow_run_id="../wf_escape",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

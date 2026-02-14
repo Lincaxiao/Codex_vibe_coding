@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .path_utils import resolve_within_root, validate_path_component
+
 
 def _utc_snapshot_id() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -88,7 +90,11 @@ class SnapshotService:
             if not source.exists():
                 raise FileNotFoundError(f"source not found: {source}")
 
-        snapshot_key = snapshot_id or _utc_snapshot_id()
+        snapshot_key = (
+            validate_path_component(snapshot_id, field_name="snapshot_id")
+            if snapshot_id is not None
+            else _utc_snapshot_id()
+        )
         snapshot_root = artifacts_root / "snapshots" / snapshot_key
         if snapshot_root.exists():
             raise FileExistsError(f"snapshot already exists: {snapshot_root}")
@@ -168,8 +174,20 @@ class SnapshotService:
         snapshot_id = str(payload.get("snapshot_id", "unknown"))
 
         mismatches: list[dict[str, str]] = []
-        for relative_path, expected_hash in expected_files.items():
-            file_path = root / relative_path
+        for raw_path, raw_expected_hash in expected_files.items():
+            relative_path = raw_path if isinstance(raw_path, str) else str(raw_path)
+            expected_hash = raw_expected_hash if isinstance(raw_expected_hash, str) else str(raw_expected_hash)
+            file_path = resolve_within_root(root=root, relative_path=relative_path)
+            if file_path is None:
+                mismatches.append(
+                    {
+                        "path": relative_path,
+                        "reason": "invalid_path",
+                        "expected": expected_hash,
+                        "actual": "",
+                    }
+                )
+                continue
             if not file_path.exists():
                 mismatches.append(
                     {

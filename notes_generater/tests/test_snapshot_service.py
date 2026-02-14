@@ -123,6 +123,40 @@ class SnapshotServiceTests(unittest.TestCase):
                 snapshot_id="snap-003",
             )
 
+    def test_snapshot_id_path_traversal_rejected(self) -> None:
+        project_root = self._create_project()
+        source_file = self.tmp_path / "sources" / "lecture03.md"
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_text("ok\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "snapshot_id must be a single path component"):
+            self.snapshot_service.create_snapshot(
+                project_root=project_root,
+                sources=[source_file],
+                snapshot_id="../snap-escape",
+            )
+
+    def test_verify_snapshot_rejects_out_of_project_path(self) -> None:
+        project_root = self._create_project()
+        source_hashes_path = project_root / "artifacts" / "source_hashes.json"
+        source_hashes_path.parent.mkdir(parents=True, exist_ok=True)
+        source_hashes_path.write_text(
+            json.dumps(
+                {
+                    "snapshot_id": "snap-malicious",
+                    "files": {"../outside.txt": "deadbeef"},
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        verified = self.snapshot_service.verify_snapshot_hashes(project_root=project_root)
+        self.assertFalse(verified.valid)
+        self.assertEqual(verified.checked_files, 1)
+        self.assertEqual(verified.mismatches[0]["reason"], "invalid_path")
+
 
 if __name__ == "__main__":
     unittest.main()
