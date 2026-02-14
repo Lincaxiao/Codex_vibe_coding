@@ -11,6 +11,7 @@ from .models import CreateProjectRequest
 from .project_service import ProjectService
 from .round0_initializer import Round0Initializer
 from .snapshot_service import SnapshotService
+from .workflow_orchestrator import WorkflowOrchestrator
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -91,6 +92,46 @@ def build_parser() -> argparse.ArgumentParser:
     run_check_parser = subparsers.add_parser("run-check", help="Run notes_root/scripts/check.sh")
     run_check_parser.add_argument("--project-root", required=True, type=Path)
     run_check_parser.add_argument("--notes-root", type=Path, help="Optional override; defaults to project config")
+
+    workflow_parser = subparsers.add_parser(
+        "run-workflow",
+        help="Run workflow rounds (round0/1/2/3/final) with per-round check",
+    )
+    workflow_parser.add_argument("--project-root", required=True, type=Path)
+    workflow_parser.add_argument("--notes-root", type=Path, help="Optional override; defaults to project config")
+    workflow_parser.add_argument(
+        "--from-round",
+        choices=["round0", "round1", "round2", "round3", "final"],
+        default="round1",
+    )
+    workflow_parser.add_argument(
+        "--to-round",
+        choices=["round0", "round1", "round2", "round3", "final"],
+        default="final",
+    )
+    workflow_parser.add_argument(
+        "--target-lecture",
+        dest="target_lectures",
+        action="append",
+        help="Target lecture identifier (repeatable)",
+    )
+    workflow_parser.add_argument(
+        "--allow-external-refs",
+        action="store_true",
+        help="Allow external references in Final round prompt",
+    )
+    workflow_parser.add_argument(
+        "--search",
+        action="store_true",
+        help="Enable codex web search during workflow rounds",
+    )
+    workflow_parser.add_argument("--max-retries", type=int, default=2)
+    workflow_parser.add_argument("--workflow-run-id", help="Optional workflow run id override")
+    workflow_parser.add_argument(
+        "--disable-auto-repair",
+        action="store_true",
+        help="Disable automatic single repair run when check fails",
+    )
     return parser
 
 
@@ -102,6 +143,12 @@ def main() -> int:
     codex_executor = CodexExecutor()
     round0_initializer = Round0Initializer()
     check_runner = CheckRunner()
+    workflow_orchestrator = WorkflowOrchestrator(
+        project_service=service,
+        codex_executor=codex_executor,
+        check_runner=check_runner,
+        round0_initializer=round0_initializer,
+    )
 
     if args.command == "create-project":
         request = CreateProjectRequest(
@@ -210,6 +257,22 @@ def main() -> int:
         check_result = check_runner.run(project_root=args.project_root, notes_root=notes_root)
         print(json.dumps(check_result.to_dict(), indent=2, ensure_ascii=False))
         return 0 if check_result.passed else 1
+
+    if args.command == "run-workflow":
+        result = workflow_orchestrator.run(
+            project_root=args.project_root,
+            notes_root=args.notes_root,
+            from_round=args.from_round,
+            to_round=args.to_round,
+            target_lectures=args.target_lectures or [],
+            allow_external_refs=args.allow_external_refs,
+            search_enabled=args.search,
+            max_retries=args.max_retries,
+            workflow_run_id=args.workflow_run_id,
+            auto_repair_check_failures=not args.disable_auto_repair,
+        )
+        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        return 0 if result.status == "succeeded" else 1
 
     parser.error(f"unsupported command: {args.command}")
     return 2

@@ -1,0 +1,190 @@
+from __future__ import annotations
+
+import json
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from notes_agent.check_runner import CheckRunResult, CheckRunner
+from notes_agent.codex_executor import CodexRunRequest, CodexRunResult
+from notes_agent.models import CreateProjectRequest
+from notes_agent.project_service import ProjectService
+from notes_agent.round0_initializer import Round0Initializer
+from notes_agent.workflow_orchestrator import WorkflowOrchestrator
+
+
+class FakeCodexExecutor:
+    def __init__(self, success_by_run_id: dict[str, bool] | None = None, default_success: bool = True) -> None:
+        self.success_by_run_id = success_by_run_id or {}
+        self.default_success = default_success
+        self.calls: list[CodexRunRequest] = []
+
+    def run(self, request: CodexRunRequest) -> CodexRunResult:
+        self.calls.append(request)
+        run_id = request.run_id or "missing-run-id"
+        run_dir = request.project_root / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        prompt_path = run_dir / "prompt.md"
+        stdout_log_path = run_dir / "codex_stdout.log"
+        last_message_path = run_dir / "codex_last_message.md"
+        run_manifest_path = run_dir / "run_manifest.json"
+
+        prompt_path.write_text(request.prompt, encoding="utf-8")
+        stdout_log_path.write_text("fake codex output\n", encoding="utf-8")
+        last_message_path.write_text("fake last message\n", encoding="utf-8")
+        run_manifest_path.write_text("{}", encoding="utf-8")
+
+        success = self.success_by_run_id.get(run_id, self.default_success)
+        return CodexRunResult(
+            run_id=run_id,
+            run_dir=run_dir,
+            success=success,
+            attempts=1,
+            exit_code=0 if success else 1,
+            prompt_path=prompt_path,
+            stdout_log_path=stdout_log_path,
+            last_message_path=last_message_path,
+            run_manifest_path=run_manifest_path,
+            error=None if success else "forced failure",
+        )
+
+
+class FakeCheckRunner:
+    def __init__(self, outcomes: list[bool] | None = None) -> None:
+        self.outcomes = outcomes or [True]
+        self.calls = 0
+
+    def run(self, *, project_root: Path | str, notes_root: Path | str, output_path: Path | str | None = None) -> CheckRunResult:
+        index = min(self.calls, len(self.outcomes) - 1)
+        passed = self.outcomes[index]
+        self.calls += 1
+        payload = {
+            "passed": passed,
+            "errors": [] if passed else ["mock check failed"],
+            "warnings": [],
+        }
+        result = CheckRunResult(
+            passed=passed,
+            exit_code=0 if passed else 1,
+            stdout=json.dumps(payload),
+            stderr="",
+            payload=payload,
+            started_at="2026-01-01T00:00:00+00:00",
+            finished_at="2026-01-01T00:00:01+00:00",
+            check_script_path=Path(notes_root) / "scripts" / "check.sh",
+        )
+        if output_path:
+            path = Path(output_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(result.to_dict(), ensure_ascii=False), encoding="utf-8")
+        return result
+
+
+class WorkflowOrchestratorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp_dir = TemporaryDirectory()
+        self.tmp_path = Path(self._tmp_dir.name)
+        self.project_service = ProjectService()
+        self.config = self.project_service.create_project(
+            CreateProjectRequest(course_id="workflow-test", workspace_root=self.tmp_path / "workspace")
+        )
+
+    def tearDown(self) -> None:
+        self._tmp_dir.cleanup()
+
+    def test_successful_workflow_rounds(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True)
+        fake_check = FakeCheckRunner(outcomes=[True, True])
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=fake_check,  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round2",
+            workflow_run_id="wf_success",
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(len(result.rounds), 2)
+        self.assertEqual(result.rounds[0].status, "completed")
+        self.assertEqual(result.rounds[1].status, "completed")
+        self.assertTrue(result.workflow_result_path.exists())
+
+        round_status = json.loads((self.config.project_root / "state" / "round_status.json").read_text(encoding="utf-8"))
+        self.assertEqual(round_status["round1"], "completed")
+        self.assertEqual(round_status["round2"], "completed")
+
+    def test_codex_failure_stops_workflow(self) -> None:
+        fake_executor = FakeCodexExecutor(success_by_run_id={"wf_fail_round1_round1": False}, default_success=True)
+        fake_check = FakeCheckRunner(outcomes=[True])
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=fake_check,  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round3",
+            workflow_run_id="wf_fail_round1",
+        )
+
+        self.assertEqual(result.status, "failed_recoverable")
+        self.assertEqual(len(result.rounds), 1)
+        self.assertEqual(result.rounds[0].round_name, "round1")
+        self.assertEqual(result.rounds[0].status, "failed")
+
+    def test_check_failure_triggers_single_repair(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True)
+        fake_check = FakeCheckRunner(outcomes=[False, True])
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=fake_check,  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            workflow_run_id="wf_repair",
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(len(result.rounds), 1)
+        self.assertTrue(result.rounds[0].repaired)
+        self.assertEqual(result.rounds[0].codex_run_id, "wf_repair_round1_repair1")
+        self.assertEqual(len(fake_executor.calls), 2)
+
+    def test_round0_only_workflow(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True)
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=CheckRunner(),
+            round0_initializer=Round0Initializer(),
+        )
+
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round0",
+            to_round="round0",
+            workflow_run_id="wf_round0",
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(len(result.rounds), 1)
+        self.assertEqual(result.rounds[0].round_name, "round0")
+        self.assertTrue((self.config.notes_root / "scripts" / "check.sh").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
