@@ -60,6 +60,11 @@ class FakeCodexExecutor:
         )
 
 
+class RaisingCodexExecutor:
+    def run(self, request: CodexRunRequest) -> CodexRunResult:
+        raise RuntimeError("boom during codex execution")
+
+
 class FakeCheckRunner:
     def __init__(self, outcomes: list[bool] | None = None) -> None:
         self.outcomes = outcomes or [True]
@@ -302,6 +307,59 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "succeeded")
         self.assertEqual(result.rounds, [])
+
+    def test_unexpected_exception_converges_running_state(self) -> None:
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=RaisingCodexExecutor(),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "boom during codex execution"):
+            orchestrator.run(
+                project_root=self.config.project_root,
+                from_round="round1",
+                to_round="round1",
+                workflow_run_id="wf_boom",
+            )
+
+        session = json.loads((self.config.project_root / "state" / "session.json").read_text(encoding="utf-8"))
+        round_status = json.loads((self.config.project_root / "state" / "round_status.json").read_text(encoding="utf-8"))
+        self.assertEqual(session["status"], "failed_recoverable")
+        self.assertIsNone(session["current_run_id"])
+        self.assertEqual(round_status["round1"], "failed")
+
+    def test_resume_rejects_target_round_earlier_than_resume_point(self) -> None:
+        round_status_path = self.config.project_root / "state" / "round_status.json"
+        round_status_path.write_text(
+            json.dumps(
+                {
+                    "round0": "completed",
+                    "round1": "completed",
+                    "round2": "failed",
+                    "round3": "pending",
+                    "final": "pending",
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "不早于 round2"):
+            orchestrator.resume(
+                project_root=self.config.project_root,
+                to_round="round1",
+                workflow_run_id="wf_resume_invalid_target",
+            )
 
 
 if __name__ == "__main__":

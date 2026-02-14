@@ -16,6 +16,13 @@ from .snapshot_service import SnapshotService
 from .workflow_orchestrator import WorkflowOrchestrator
 
 
+def _non_negative_int(raw: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {value}")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Notes agent project tools")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -72,7 +79,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--run-id", help="Optional run_id override")
     run_parser.add_argument("--model", help="Optional model override")
     run_parser.add_argument("--search", action="store_true", help="Enable codex web search")
-    run_parser.add_argument("--max-retries", type=int, default=2, help="Retry count for retryable failures")
+    run_parser.add_argument(
+        "--max-retries",
+        type=_non_negative_int,
+        default=2,
+        help="Retry count for retryable failures",
+    )
 
     init_round0_parser = subparsers.add_parser(
         "init-round0", help="Initialize notes_root scaffold and check scripts"
@@ -127,7 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable codex web search during workflow rounds",
     )
-    workflow_parser.add_argument("--max-retries", type=int, default=2)
+    workflow_parser.add_argument("--max-retries", type=_non_negative_int, default=2)
     workflow_parser.add_argument("--workflow-run-id", help="Optional workflow run id override")
     workflow_parser.add_argument(
         "--disable-auto-repair",
@@ -182,7 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resume_parser.add_argument("--allow-external-refs", action="store_true")
     resume_parser.add_argument("--search", action="store_true")
-    resume_parser.add_argument("--max-retries", type=int, default=2)
+    resume_parser.add_argument("--max-retries", type=_non_negative_int, default=2)
     resume_parser.add_argument("--workflow-run-id", help="Optional workflow run id override")
     resume_parser.add_argument("--disable-auto-repair", action="store_true")
     resume_parser.add_argument("--pause-after-each-round", action="store_true")
@@ -272,17 +284,21 @@ def main() -> int:
             config = service.load_project_config(args.project_root)
             notes_root = config.notes_root
 
-        result = codex_executor.run(
-            CodexRunRequest(
-                project_root=args.project_root,
-                notes_root=notes_root,
-                prompt=prompt_text,
-                run_id=args.run_id,
-                model=args.model,
-                search_enabled=args.search,
-                max_retries=args.max_retries,
+        try:
+            result = codex_executor.run(
+                CodexRunRequest(
+                    project_root=args.project_root,
+                    notes_root=notes_root,
+                    prompt=prompt_text,
+                    run_id=args.run_id,
+                    model=args.model,
+                    search_enabled=args.search,
+                    max_retries=args.max_retries,
+                )
             )
-        )
+        except ValueError as exc:
+            print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
+            return 2
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
         return 0 if result.success else 1
 
@@ -330,21 +346,25 @@ def main() -> int:
         return 0 if check_result.passed else 1
 
     if args.command == "run-workflow":
-        result = workflow_orchestrator.run(
-            project_root=args.project_root,
-            notes_root=args.notes_root,
-            from_round=args.from_round,
-            to_round=args.to_round,
-            target_lectures=args.target_lectures or [],
-            allow_external_refs=args.allow_external_refs,
-            search_enabled=args.search,
-            max_retries=args.max_retries,
-            workflow_run_id=args.workflow_run_id,
-            auto_repair_check_failures=not args.disable_auto_repair,
-            pause_after_each_round=args.pause_after_each_round if args.pause_after_each_round else None,
-            max_changed_lines=args.max_changed_lines,
-            max_changed_files=args.max_changed_files,
-        )
+        try:
+            result = workflow_orchestrator.run(
+                project_root=args.project_root,
+                notes_root=args.notes_root,
+                from_round=args.from_round,
+                to_round=args.to_round,
+                target_lectures=args.target_lectures or [],
+                allow_external_refs=args.allow_external_refs,
+                search_enabled=args.search,
+                max_retries=args.max_retries,
+                workflow_run_id=args.workflow_run_id,
+                auto_repair_check_failures=not args.disable_auto_repair,
+                pause_after_each_round=args.pause_after_each_round if args.pause_after_each_round else None,
+                max_changed_lines=args.max_changed_lines,
+                max_changed_files=args.max_changed_files,
+            )
+        except ValueError as exc:
+            print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
+            return 2
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
         return 0 if result.status in {"succeeded", "paused"} else 1
 
@@ -361,20 +381,24 @@ def main() -> int:
         return 0
 
     if args.command == "resume-workflow":
-        result = workflow_orchestrator.resume(
-            project_root=args.project_root,
-            notes_root=args.notes_root,
-            to_round=args.to_round,
-            target_lectures=args.target_lectures or [],
-            allow_external_refs=args.allow_external_refs,
-            search_enabled=args.search,
-            max_retries=args.max_retries,
-            workflow_run_id=args.workflow_run_id,
-            auto_repair_check_failures=not args.disable_auto_repair,
-            pause_after_each_round=args.pause_after_each_round if args.pause_after_each_round else None,
-            max_changed_lines=args.max_changed_lines,
-            max_changed_files=args.max_changed_files,
-        )
+        try:
+            result = workflow_orchestrator.resume(
+                project_root=args.project_root,
+                notes_root=args.notes_root,
+                to_round=args.to_round,
+                target_lectures=args.target_lectures or [],
+                allow_external_refs=args.allow_external_refs,
+                search_enabled=args.search,
+                max_retries=args.max_retries,
+                workflow_run_id=args.workflow_run_id,
+                auto_repair_check_failures=not args.disable_auto_repair,
+                pause_after_each_round=args.pause_after_each_round if args.pause_after_each_round else None,
+                max_changed_lines=args.max_changed_lines,
+                max_changed_files=args.max_changed_files,
+            )
+        except ValueError as exc:
+            print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
+            return 2
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
         return 0 if result.status in {"succeeded", "paused"} else 1
 

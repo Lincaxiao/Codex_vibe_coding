@@ -59,6 +59,9 @@ class CodexRunResult:
 
 class CodexExecutor:
     def run(self, request: CodexRunRequest) -> CodexRunResult:
+        if request.max_retries < 0:
+            raise ValueError(f"max_retries must be >= 0, got {request.max_retries}")
+
         project_root = request.project_root.expanduser().resolve()
         notes_root = request.notes_root.expanduser().resolve()
         run_id = request.run_id or _default_run_id()

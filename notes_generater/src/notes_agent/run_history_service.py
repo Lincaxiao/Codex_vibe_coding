@@ -112,20 +112,27 @@ class RunHistoryService:
         round_name: str | None = None,
     ) -> Path | None:
         root = Path(project_root).expanduser().resolve()
-        run_dir = root / "runs" / run_id
-        if not run_dir.exists():
+        runs_dir = (root / "runs").resolve()
+        run_component = self._validate_component(run_id)
+        if run_component is None:
+            return None
+        run_dir = self._resolve_child_dir(base_dir=runs_dir, child_name=run_component)
+        if run_dir is None:
             return None
 
         if round_name:
-            candidate = run_dir / round_name / "changes.patch"
-            return candidate if candidate.exists() else None
+            round_component = self._validate_component(round_name)
+            if round_component is None:
+                return None
+            candidate = self._resolve_child_file(base_dir=run_dir, parts=(round_component, "changes.patch"))
+            return candidate
 
-        direct_patch = run_dir / "changes.patch"
-        if direct_patch.exists():
+        direct_patch = self._resolve_child_file(base_dir=run_dir, parts=("changes.patch",))
+        if direct_patch is not None:
             return direct_patch
 
-        workflow_path = run_dir / "workflow_result.json"
-        if workflow_path.exists():
+        workflow_path = self._resolve_child_file(base_dir=run_dir, parts=("workflow_result.json",))
+        if workflow_path is not None:
             payload = self._read_json(workflow_path)
             rounds = payload.get("rounds", [])
             if isinstance(rounds, list):
@@ -133,8 +140,14 @@ class RunHistoryService:
                     if isinstance(item, dict):
                         name = item.get("round_name")
                         if isinstance(name, str):
-                            candidate = run_dir / name / "changes.patch"
-                            if candidate.exists():
+                            round_component = self._validate_component(name)
+                            if round_component is None:
+                                continue
+                            candidate = self._resolve_child_file(
+                                base_dir=run_dir,
+                                parts=(round_component, "changes.patch"),
+                            )
+                            if candidate is not None:
                                 return candidate
         return None
 
@@ -164,3 +177,38 @@ class RunHistoryService:
     def _read_json(self, path: Path) -> dict[str, Any]:
         with path.open("r", encoding="utf-8") as fp:
             return json.load(fp)
+
+    def _validate_component(self, value: str) -> str | None:
+        trimmed = value.strip()
+        if not trimmed or "\\" in trimmed:
+            return None
+        path = Path(trimmed)
+        if len(path.parts) != 1:
+            return None
+        component = path.parts[0]
+        if component in {".", ".."}:
+            return None
+        return component
+
+    def _resolve_child_dir(self, *, base_dir: Path, child_name: str) -> Path | None:
+        candidate = (base_dir / child_name).resolve()
+        if not self._is_within(candidate, base_dir):
+            return None
+        if not candidate.exists() or not candidate.is_dir():
+            return None
+        return candidate
+
+    def _resolve_child_file(self, *, base_dir: Path, parts: tuple[str, ...]) -> Path | None:
+        candidate = base_dir.joinpath(*parts).resolve()
+        if not self._is_within(candidate, base_dir):
+            return None
+        if not candidate.exists() or not candidate.is_file():
+            return None
+        return candidate
+
+    def _is_within(self, candidate: Path, base_dir: Path) -> bool:
+        try:
+            candidate.relative_to(base_dir)
+            return True
+        except ValueError:
+            return False

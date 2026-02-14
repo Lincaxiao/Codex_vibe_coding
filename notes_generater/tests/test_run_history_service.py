@@ -124,6 +124,52 @@ class RunHistoryServiceTests(unittest.TestCase):
         resolved = self.service.resolve_patch_path(project_root=self.config.project_root, run_id="run_patch")
         self.assertEqual(resolved, patch_path)
 
+    def test_read_patch_rejects_run_id_path_traversal(self) -> None:
+        secret_patch = self.config.project_root / "secret" / "changes.patch"
+        secret_patch.parent.mkdir(parents=True, exist_ok=True)
+        secret_patch.write_text("SECRET\n", encoding="utf-8")
+
+        resolved = self.service.resolve_patch_path(project_root=self.config.project_root, run_id="../secret")
+        self.assertIsNone(resolved)
+        patch_text = self.service.read_patch(project_root=self.config.project_root, run_id="../secret")
+        self.assertIsNone(patch_text)
+
+    def test_read_patch_rejects_round_name_path_traversal(self) -> None:
+        run_dir = self.config.project_root / "runs" / "wf_safe"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        secret_run_dir = self.config.project_root / "runs" / "secret_round"
+        secret_run_dir.mkdir(parents=True, exist_ok=True)
+        (secret_run_dir / "changes.patch").write_text("LEAKED\n", encoding="utf-8")
+
+        resolved = self.service.resolve_patch_path(
+            project_root=self.config.project_root,
+            run_id="wf_safe",
+            round_name="../secret_round",
+        )
+        self.assertIsNone(resolved)
+
+    def test_read_patch_ignores_malicious_round_name_in_workflow_result(self) -> None:
+        run_dir = self.config.project_root / "runs" / "wf_mal"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        secret_patch = self.config.project_root / "secret" / "changes.patch"
+        secret_patch.parent.mkdir(parents=True, exist_ok=True)
+        secret_patch.write_text("SHOULD_NOT_READ\n", encoding="utf-8")
+        (run_dir / "workflow_result.json").write_text(
+            json.dumps(
+                {
+                    "workflow_run_id": "wf_mal",
+                    "status": "succeeded",
+                    "rounds": [{"round_name": "../secret"}],
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        resolved = self.service.resolve_patch_path(project_root=self.config.project_root, run_id="wf_mal")
+        self.assertIsNone(resolved)
+
 
 if __name__ == "__main__":
     unittest.main()

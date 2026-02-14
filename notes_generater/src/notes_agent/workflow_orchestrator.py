@@ -117,6 +117,8 @@ class WorkflowOrchestrator:
         root = Path(project_root).expanduser().resolve()
         config = self.project_service.load_project_config(root)
         notes = Path(notes_root).expanduser().resolve() if notes_root else config.notes_root
+        if max_retries < 0:
+            raise ValueError(f"max_retries must be >= 0, got {max_retries}")
         pause_after_round = config.pause_after_each_round if pause_after_each_round is None else pause_after_each_round
         changed_lines_limit = config.max_changed_lines if max_changed_lines is None else max_changed_lines
         changed_files_limit = config.max_changed_files if max_changed_files is None else max_changed_files
@@ -137,51 +139,206 @@ class WorkflowOrchestrator:
         session_payload["updated_at"] = _now_iso()
         self._write_json(session_path, session_payload)
 
-        for round_name in rounds:
-            round_status_payload[round_name] = "running"
-            self._write_json(round_status_path, round_status_payload)
-            before_state = self.diff_service.capture_state(notes_root=notes)
-            round_artifact_dir = workflow_dir / round_name
-            round_artifact_dir.mkdir(parents=True, exist_ok=True)
+        active_round: RoundName | None = None
+        unexpected_error: Exception | None = None
+        finished_at = started_at
+        try:
+            for round_name in rounds:
+                active_round = round_name
+                round_status_payload[round_name] = "running"
+                self._write_json(round_status_path, round_status_payload)
+                before_state = self.diff_service.capture_state(notes_root=notes)
+                round_artifact_dir = workflow_dir / round_name
+                round_artifact_dir.mkdir(parents=True, exist_ok=True)
 
-            if round_name == "round0":
-                init_result = self.round0_initializer.initialize(
-                    project_root=root,
-                    notes_root=notes,
-                    course_id=config.course_id,
-                )
-                self._write_json(round_artifact_dir / "round0_init_result.json", init_result.to_dict())
-                check_output_path = round_artifact_dir / "check_result.json"
-                check_result = self.check_runner.run(
-                    project_root=root,
-                    notes_root=notes,
-                    output_path=check_output_path,
-                )
-                after_state = self.diff_service.capture_state(notes_root=notes)
-                diff_summary = self.diff_service.write_diff_artifacts(
-                    notes_root=notes,
-                    before_state=before_state,
-                    after_state=after_state,
-                    run_dir=round_artifact_dir,
-                )
-                if not check_result.passed:
-                    round_status_payload["round0"] = "failed"
-                    workflow_status = "failed_recoverable"
+                if round_name == "round0":
+                    init_result = self.round0_initializer.initialize(
+                        project_root=root,
+                        notes_root=notes,
+                        course_id=config.course_id,
+                    )
+                    self._write_json(round_artifact_dir / "round0_init_result.json", init_result.to_dict())
+                    check_output_path = round_artifact_dir / "check_result.json"
+                    check_result = self.check_runner.run(
+                        project_root=root,
+                        notes_root=notes,
+                        output_path=check_output_path,
+                    )
+                    after_state = self.diff_service.capture_state(notes_root=notes)
+                    diff_summary = self.diff_service.write_diff_artifacts(
+                        notes_root=notes,
+                        before_state=before_state,
+                        after_state=after_state,
+                        run_dir=round_artifact_dir,
+                    )
+                    if not check_result.passed:
+                        round_status_payload["round0"] = "failed"
+                        workflow_status = "failed_recoverable"
+                        round_results.append(
+                            RoundExecutionResult(
+                                round_name="round0",
+                                status="failed",
+                                codex_run_id=None,
+                                codex_success=None,
+                                check_passed=False,
+                                repaired=False,
+                                check_output_path=str(check_output_path),
+                                changed_files=diff_summary.changed_files,
+                                changed_lines=diff_summary.changed_lines,
+                                patch_path=str(diff_summary.patch_path),
+                                notes_snapshot_path=str(diff_summary.notes_snapshot_path),
+                                pause_reason=None,
+                                error=self._check_error_summary(check_result),
+                            )
+                        )
+                        self._write_json(round_status_path, round_status_payload)
+                        break
+
+                    pause_reason = self._evaluate_pause(
+                        round_name=round_name,
+                        diff_summary=diff_summary,
+                        pause_after_round=pause_after_round,
+                        changed_lines_limit=changed_lines_limit,
+                        changed_files_limit=changed_files_limit,
+                    )
+                    if pause_reason:
+                        round_status_payload["round0"] = "paused"
+                        workflow_status = "paused"
+                    else:
+                        round_status_payload["round0"] = "completed"
+
                     round_results.append(
                         RoundExecutionResult(
                             round_name="round0",
-                            status="failed",
+                            status="paused" if pause_reason else "completed",
                             codex_run_id=None,
                             codex_success=None,
-                            check_passed=False,
+                            check_passed=True,
                             repaired=False,
                             check_output_path=str(check_output_path),
                             changed_files=diff_summary.changed_files,
                             changed_lines=diff_summary.changed_lines,
                             patch_path=str(diff_summary.patch_path),
                             notes_snapshot_path=str(diff_summary.notes_snapshot_path),
+                            pause_reason=pause_reason,
+                            error=None,
+                        )
+                    )
+                    self._write_json(round_status_path, round_status_payload)
+                    if pause_reason:
+                        break
+                    continue
+
+                prompt = self._build_round_prompt(
+                    round_name=round_name,
+                    notes_root=notes,
+                    target_lectures=target_lectures or [],
+                    allow_external_refs=allow_external_refs,
+                )
+                codex_run_id = f"{workflow_id}_{round_name}"
+                codex_result = self.codex_executor.run(
+                    CodexRunRequest(
+                        project_root=root,
+                        notes_root=notes,
+                        prompt=prompt,
+                        run_id=codex_run_id,
+                        search_enabled=search_enabled,
+                        max_retries=max_retries,
+                    )
+                )
+
+                final_run: CodexRunResult = codex_result
+                check_result: CheckRunResult | None = None
+                repaired = False
+
+                if codex_result.success:
+                    check_result = self.check_runner.run(
+                        project_root=root,
+                        notes_root=notes,
+                        output_path=codex_result.run_dir / "check_result.json",
+                    )
+
+                    if not check_result.passed and auto_repair_check_failures:
+                        repair_prompt = self._build_repair_prompt(
+                            round_name=round_name,
+                            check_result=check_result,
+                            notes_root=notes,
+                        )
+                        repair_run_id = f"{workflow_id}_{round_name}_repair1"
+                        repair_result = self.codex_executor.run(
+                            CodexRunRequest(
+                                project_root=root,
+                                notes_root=notes,
+                                prompt=repair_prompt,
+                                run_id=repair_run_id,
+                                search_enabled=search_enabled,
+                                max_retries=max_retries,
+                            )
+                        )
+                        repaired = True
+                        final_run = repair_result
+                        if repair_result.success:
+                            check_result = self.check_runner.run(
+                                project_root=root,
+                                notes_root=notes,
+                                output_path=repair_result.run_dir / "check_result.json",
+                            )
+                        else:
+                            check_result = None
+
+                after_state = self.diff_service.capture_state(notes_root=notes)
+                diff_summary = self.diff_service.write_diff_artifacts(
+                    notes_root=notes,
+                    before_state=before_state,
+                    after_state=after_state,
+                    run_dir=final_run.run_dir,
+                )
+
+                if not final_run.success:
+                    round_status_payload[round_name] = "failed"
+                    workflow_status = "failed_recoverable"
+                    round_results.append(
+                        RoundExecutionResult(
+                            round_name=round_name,
+                            status="failed",
+                            codex_run_id=final_run.run_id,
+                            codex_success=False,
+                            check_passed=None,
+                            repaired=repaired,
+                            check_output_path=None,
+                            changed_files=diff_summary.changed_files,
+                            changed_lines=diff_summary.changed_lines,
+                            patch_path=str(diff_summary.patch_path),
+                            notes_snapshot_path=str(diff_summary.notes_snapshot_path),
                             pause_reason=None,
-                            error=self._check_error_summary(check_result),
+                            error=final_run.error,
+                        )
+                    )
+                    self._write_json(round_status_path, round_status_payload)
+                    break
+
+                if check_result is None or not check_result.passed:
+                    round_status_payload[round_name] = "failed"
+                    workflow_status = "failed_recoverable"
+                    round_results.append(
+                        RoundExecutionResult(
+                            round_name=round_name,
+                            status="failed",
+                            codex_run_id=final_run.run_id,
+                            codex_success=True,
+                            check_passed=False,
+                            repaired=repaired,
+                            check_output_path=str(final_run.run_dir / "check_result.json")
+                            if (final_run.run_dir / "check_result.json").exists()
+                            else None,
+                            changed_files=diff_summary.changed_files,
+                            changed_lines=diff_summary.changed_lines,
+                            patch_path=str(diff_summary.patch_path),
+                            notes_snapshot_path=str(diff_summary.notes_snapshot_path),
+                            pause_reason=None,
+                            error=self._check_error_summary(check_result)
+                            if check_result is not None
+                            else "check result missing",
                         )
                     )
                     self._write_json(round_status_path, round_status_payload)
@@ -195,20 +352,20 @@ class WorkflowOrchestrator:
                     changed_files_limit=changed_files_limit,
                 )
                 if pause_reason:
-                    round_status_payload["round0"] = "paused"
+                    round_status_payload[round_name] = "paused"
                     workflow_status = "paused"
                 else:
-                    round_status_payload["round0"] = "completed"
+                    round_status_payload[round_name] = "completed"
 
                 round_results.append(
                     RoundExecutionResult(
-                        round_name="round0",
+                        round_name=round_name,
                         status="paused" if pause_reason else "completed",
-                        codex_run_id=None,
-                        codex_success=None,
+                        codex_run_id=final_run.run_id,
+                        codex_success=True,
                         check_passed=True,
-                        repaired=False,
-                        check_output_path=str(check_output_path),
+                        repaired=repaired,
+                        check_output_path=str(final_run.run_dir / "check_result.json"),
                         changed_files=diff_summary.changed_files,
                         changed_lines=diff_summary.changed_lines,
                         patch_path=str(diff_summary.patch_path),
@@ -220,168 +377,43 @@ class WorkflowOrchestrator:
                 self._write_json(round_status_path, round_status_payload)
                 if pause_reason:
                     break
-                continue
-
-            prompt = self._build_round_prompt(
-                round_name=round_name,
-                notes_root=notes,
-                target_lectures=target_lectures or [],
-                allow_external_refs=allow_external_refs,
-            )
-            codex_run_id = f"{workflow_id}_{round_name}"
-            codex_result = self.codex_executor.run(
-                CodexRunRequest(
-                    project_root=root,
-                    notes_root=notes,
-                    prompt=prompt,
-                    run_id=codex_run_id,
-                    search_enabled=search_enabled,
-                    max_retries=max_retries,
-                )
-            )
-
-            final_run: CodexRunResult = codex_result
-            check_result: CheckRunResult | None = None
-            repaired = False
-
-            if codex_result.success:
-                check_result = self.check_runner.run(
-                    project_root=root,
-                    notes_root=notes,
-                    output_path=codex_result.run_dir / "check_result.json",
-                )
-
-                if not check_result.passed and auto_repair_check_failures:
-                    repair_prompt = self._build_repair_prompt(
-                        round_name=round_name,
-                        check_result=check_result,
-                        notes_root=notes,
-                    )
-                    repair_run_id = f"{workflow_id}_{round_name}_repair1"
-                    repair_result = self.codex_executor.run(
-                        CodexRunRequest(
-                            project_root=root,
-                            notes_root=notes,
-                            prompt=repair_prompt,
-                            run_id=repair_run_id,
-                            search_enabled=search_enabled,
-                            max_retries=max_retries,
-                        )
-                    )
-                    repaired = True
-                    final_run = repair_result
-                    if repair_result.success:
-                        check_result = self.check_runner.run(
-                            project_root=root,
-                            notes_root=notes,
-                            output_path=repair_result.run_dir / "check_result.json",
-                        )
-                    else:
-                        check_result = None
-
-            after_state = self.diff_service.capture_state(notes_root=notes)
-            diff_summary = self.diff_service.write_diff_artifacts(
-                notes_root=notes,
-                before_state=before_state,
-                after_state=after_state,
-                run_dir=final_run.run_dir,
-            )
-
-            if not final_run.success:
-                round_status_payload[round_name] = "failed"
-                workflow_status = "failed_recoverable"
+        except Exception as exc:
+            workflow_status = "failed_recoverable"
+            if active_round is not None and round_status_payload.get(active_round) == "running":
+                round_status_payload[active_round] = "failed"
                 round_results.append(
                     RoundExecutionResult(
-                        round_name=round_name,
+                        round_name=active_round,
                         status="failed",
-                        codex_run_id=final_run.run_id,
-                        codex_success=False,
+                        codex_run_id=None,
+                        codex_success=None,
                         check_passed=None,
-                        repaired=repaired,
+                        repaired=False,
                         check_output_path=None,
-                        changed_files=diff_summary.changed_files,
-                        changed_lines=diff_summary.changed_lines,
-                        patch_path=str(diff_summary.patch_path),
-                        notes_snapshot_path=str(diff_summary.notes_snapshot_path),
+                        changed_files=0,
+                        changed_lines=0,
+                        patch_path=None,
+                        notes_snapshot_path=None,
                         pause_reason=None,
-                        error=final_run.error,
+                        error=str(exc),
                     )
                 )
-                self._write_json(round_status_path, round_status_payload)
-                break
-
-            if check_result is None or not check_result.passed:
-                round_status_payload[round_name] = "failed"
-                workflow_status = "failed_recoverable"
-                round_results.append(
-                    RoundExecutionResult(
-                        round_name=round_name,
-                        status="failed",
-                        codex_run_id=final_run.run_id,
-                        codex_success=True,
-                        check_passed=False,
-                        repaired=repaired,
-                        check_output_path=str(final_run.run_dir / "check_result.json")
-                        if (final_run.run_dir / "check_result.json").exists()
-                        else None,
-                        changed_files=diff_summary.changed_files,
-                        changed_lines=diff_summary.changed_lines,
-                        patch_path=str(diff_summary.patch_path),
-                        notes_snapshot_path=str(diff_summary.notes_snapshot_path),
-                        pause_reason=None,
-                        error=self._check_error_summary(check_result)
-                        if check_result is not None
-                        else "check result missing",
-                    )
-                )
-                self._write_json(round_status_path, round_status_payload)
-                break
-
-            pause_reason = self._evaluate_pause(
-                round_name=round_name,
-                diff_summary=diff_summary,
-                pause_after_round=pause_after_round,
-                changed_lines_limit=changed_lines_limit,
-                changed_files_limit=changed_files_limit,
-            )
-            if pause_reason:
-                round_status_payload[round_name] = "paused"
-                workflow_status = "paused"
+            unexpected_error = exc
+        finally:
+            finished_at = _now_iso()
+            if workflow_status == "succeeded":
+                session_payload["status"] = "idle"
+            elif workflow_status == "paused":
+                session_payload["status"] = "paused"
             else:
-                round_status_payload[round_name] = "completed"
-
-            round_results.append(
-                RoundExecutionResult(
-                    round_name=round_name,
-                    status="paused" if pause_reason else "completed",
-                    codex_run_id=final_run.run_id,
-                    codex_success=True,
-                    check_passed=True,
-                    repaired=repaired,
-                    check_output_path=str(final_run.run_dir / "check_result.json"),
-                    changed_files=diff_summary.changed_files,
-                    changed_lines=diff_summary.changed_lines,
-                    patch_path=str(diff_summary.patch_path),
-                    notes_snapshot_path=str(diff_summary.notes_snapshot_path),
-                    pause_reason=pause_reason,
-                    error=None,
-                )
-            )
+                session_payload["status"] = "failed_recoverable"
+            session_payload["current_run_id"] = None
+            session_payload["updated_at"] = finished_at
+            self._write_json(session_path, session_payload)
             self._write_json(round_status_path, round_status_payload)
-            if pause_reason:
-                break
 
-        finished_at = _now_iso()
-        if workflow_status == "succeeded":
-            session_payload["status"] = "idle"
-        elif workflow_status == "paused":
-            session_payload["status"] = "paused"
-        else:
-            session_payload["status"] = "failed_recoverable"
-        session_payload["current_run_id"] = None
-        session_payload["updated_at"] = finished_at
-        self._write_json(session_path, session_payload)
-        self._write_json(round_status_path, round_status_payload)
+        if unexpected_error is not None:
+            raise unexpected_error
 
         result = WorkflowRunResult(
             workflow_run_id=workflow_id,
@@ -428,6 +460,11 @@ class WorkflowOrchestrator:
             )
             self._write_json(result.workflow_result_path, result.to_dict())
             return result
+
+        if RUN_ORDER.index(from_round) > RUN_ORDER.index(to_round):
+            raise ValueError(
+                f"无法恢复到 {to_round}: 当前应从 {from_round} 开始，请选择不早于 {from_round} 的目标轮次"
+            )
 
         return self.run(
             project_root=root,

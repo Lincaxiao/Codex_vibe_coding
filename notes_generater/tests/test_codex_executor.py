@@ -127,6 +127,20 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertEqual(state["exec_calls"], 1)
 
+    def test_negative_max_retries_rejected(self) -> None:
+        with mock.patch("notes_agent.codex_executor.subprocess.run") as mock_run:
+            with self.assertRaisesRegex(ValueError, "max_retries must be >= 0"):
+                self.executor.run(
+                    CodexRunRequest(
+                        project_root=self.project_root,
+                        notes_root=self.notes_root,
+                        prompt="失败测试",
+                        run_id="run_negative_retries",
+                        max_retries=-1,
+                    )
+                )
+        mock_run.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

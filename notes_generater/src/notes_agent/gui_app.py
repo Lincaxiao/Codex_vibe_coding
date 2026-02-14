@@ -75,8 +75,11 @@ def main() -> int:
             try:
                 result = self._fn()
                 self.finished.emit(result)
-            except Exception:
-                self.failed.emit(traceback.format_exc())
+            except Exception as exc:
+                if isinstance(exc, ValueError):
+                    self.failed.emit(str(exc))
+                else:
+                    self.failed.emit(traceback.format_exc())
 
     class MainWindow(QMainWindow):  # type: ignore[misc]
         def __init__(self) -> None:
