@@ -5,7 +5,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from .check_runner import CheckRunResult, CheckRunner
 from .codex_executor import CodexExecutor, CodexRunRequest, CodexRunResult
@@ -116,6 +116,7 @@ class WorkflowOrchestrator:
         pause_after_each_round: bool | None = None,
         max_changed_lines: int | None = None,
         max_changed_files: int | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> WorkflowRunResult:
         started_at = _now_iso()
         root = Path(project_root).expanduser().resolve()
@@ -137,6 +138,10 @@ class WorkflowOrchestrator:
         rounds = self._select_rounds(from_round=from_round, to_round=to_round)
         round_results: list[RoundExecutionResult] = []
         workflow_status = "succeeded"
+        self._emit_progress(
+            progress_callback,
+            f"[workflow] 启动 workflow_id={workflow_id}，执行轮次：{from_round}->{to_round} ({', '.join(rounds)})",
+        )
 
         session_path = root / "state" / "session.json"
         round_status_path = root / "state" / "round_status.json"
@@ -153,6 +158,8 @@ class WorkflowOrchestrator:
         try:
             for round_name in rounds:
                 active_round = round_name
+                round_progress = self._round_progress(progress_callback, round_name=round_name)
+                self._emit_progress(progress_callback, f"[workflow] {round_name} 开始")
                 round_status_payload[round_name] = "running"
                 self._write_json(round_status_path, round_status_payload)
                 before_state = self.diff_service.capture_state(notes_root=notes)
@@ -160,6 +167,7 @@ class WorkflowOrchestrator:
                 round_artifact_dir.mkdir(parents=True, exist_ok=True)
 
                 if round_name == "round0":
+                    self._emit_progress(round_progress, "初始化笔记骨架")
                     init_result = self.round0_initializer.initialize(
                         project_root=root,
                         notes_root=notes,
@@ -167,10 +175,12 @@ class WorkflowOrchestrator:
                     )
                     self._write_json(round_artifact_dir / "round0_init_result.json", init_result.to_dict())
                     check_output_path = round_artifact_dir / "check_result.json"
+                    self._emit_progress(round_progress, "执行检查")
                     check_result = self.check_runner.run(
                         project_root=root,
                         notes_root=notes,
                         output_path=check_output_path,
+                        progress_callback=round_progress,
                     )
                     after_state = self.diff_service.capture_state(notes_root=notes)
                     diff_summary = self.diff_service.write_diff_artifacts(
@@ -179,8 +189,13 @@ class WorkflowOrchestrator:
                         after_state=after_state,
                         run_dir=round_artifact_dir,
                     )
+                    self._emit_progress(
+                        round_progress,
+                        f"改动统计：files={diff_summary.changed_files}, lines={diff_summary.changed_lines}",
+                    )
                     snapshot_error = self._verify_snapshot_integrity_if_present(project_root=root)
                     if snapshot_error:
+                        self._emit_progress(round_progress, f"快照校验失败：{snapshot_error}")
                         round_status_payload["round0"] = "failed"
                         workflow_status = "failed_recoverable"
                         round_results.append(
@@ -203,6 +218,7 @@ class WorkflowOrchestrator:
                         self._write_json(round_status_path, round_status_payload)
                         break
                     if not check_result.passed:
+                        self._emit_progress(round_progress, f"检查失败：{self._check_error_summary(check_result)}")
                         round_status_payload["round0"] = "failed"
                         workflow_status = "failed_recoverable"
                         round_results.append(
@@ -235,8 +251,10 @@ class WorkflowOrchestrator:
                     if pause_reason:
                         round_status_payload["round0"] = "paused"
                         workflow_status = "paused"
+                        self._emit_progress(round_progress, f"已暂停：{pause_reason}")
                     else:
                         round_status_payload["round0"] = "completed"
+                        self._emit_progress(round_progress, "执行完成")
 
                     round_results.append(
                         RoundExecutionResult(
@@ -272,6 +290,10 @@ class WorkflowOrchestrator:
                     search_enabled=search_enabled,
                     allow_external_refs=allow_external_refs,
                 )
+                self._emit_progress(
+                    round_progress,
+                    f"调用 Codex：run_id={codex_run_id}, search_enabled={round_search_enabled}",
+                )
                 codex_result = self.codex_executor.run(
                     CodexRunRequest(
                         project_root=root,
@@ -280,7 +302,8 @@ class WorkflowOrchestrator:
                         run_id=codex_run_id,
                         search_enabled=round_search_enabled,
                         max_retries=max_retries,
-                    )
+                    ),
+                    progress_callback=round_progress,
                 )
 
                 final_run: CodexRunResult = codex_result
@@ -288,13 +311,16 @@ class WorkflowOrchestrator:
                 repaired = False
 
                 if codex_result.success:
+                    self._emit_progress(round_progress, "执行检查")
                     check_result = self.check_runner.run(
                         project_root=root,
                         notes_root=notes,
                         output_path=codex_result.run_dir / "check_result.json",
+                        progress_callback=round_progress,
                     )
 
                     if not check_result.passed and auto_repair_check_failures:
+                        self._emit_progress(round_progress, "检查未通过，触发自动修复")
                         repair_prompt = self._build_repair_prompt(
                             round_name=round_name,
                             check_result=check_result,
@@ -309,15 +335,18 @@ class WorkflowOrchestrator:
                                 run_id=repair_run_id,
                                 search_enabled=round_search_enabled,
                                 max_retries=max_retries,
-                            )
+                            ),
+                            progress_callback=round_progress,
                         )
                         repaired = True
                         final_run = repair_result
                         if repair_result.success:
+                            self._emit_progress(round_progress, "修复后重新执行检查")
                             check_result = self.check_runner.run(
                                 project_root=root,
                                 notes_root=notes,
                                 output_path=repair_result.run_dir / "check_result.json",
+                                progress_callback=round_progress,
                             )
                         else:
                             check_result = None
@@ -329,8 +358,13 @@ class WorkflowOrchestrator:
                     after_state=after_state,
                     run_dir=round_artifact_dir,
                 )
+                self._emit_progress(
+                    round_progress,
+                    f"改动统计：files={diff_summary.changed_files}, lines={diff_summary.changed_lines}",
+                )
                 snapshot_error = self._verify_snapshot_integrity_if_present(project_root=root)
                 if snapshot_error:
+                    self._emit_progress(round_progress, f"快照校验失败：{snapshot_error}")
                     check_path = final_run.run_dir / "check_result.json"
                     round_status_payload[round_name] = "failed"
                     workflow_status = "failed_recoverable"
@@ -355,6 +389,7 @@ class WorkflowOrchestrator:
                     break
 
                 if not final_run.success:
+                    self._emit_progress(round_progress, f"Codex 执行失败：{final_run.error or 'unknown error'}")
                     round_status_payload[round_name] = "failed"
                     workflow_status = "failed_recoverable"
                     round_results.append(
@@ -378,6 +413,10 @@ class WorkflowOrchestrator:
                     break
 
                 if check_result is None or not check_result.passed:
+                    self._emit_progress(
+                        round_progress,
+                        f"检查失败：{self._check_error_summary(check_result) if check_result is not None else 'check result missing'}",
+                    )
                     round_status_payload[round_name] = "failed"
                     workflow_status = "failed_recoverable"
                     round_results.append(
@@ -414,8 +453,10 @@ class WorkflowOrchestrator:
                 if pause_reason:
                     round_status_payload[round_name] = "paused"
                     workflow_status = "paused"
+                    self._emit_progress(round_progress, f"已暂停：{pause_reason}")
                 else:
                     round_status_payload[round_name] = "completed"
+                    self._emit_progress(round_progress, "执行完成")
 
                 round_results.append(
                     RoundExecutionResult(
@@ -439,6 +480,7 @@ class WorkflowOrchestrator:
                     break
         except Exception as exc:
             workflow_status = "failed_recoverable"
+            self._emit_progress(progress_callback, f"[workflow] 异常中断：{exc}")
             if active_round is not None and round_status_payload.get(active_round) == "running":
                 round_status_payload[active_round] = "failed"
                 round_results.append(
@@ -471,6 +513,7 @@ class WorkflowOrchestrator:
             session_payload["updated_at"] = finished_at
             self._write_json(session_path, session_payload)
             self._write_json(round_status_path, round_status_payload)
+            self._emit_progress(progress_callback, f"[workflow] 结束，状态：{workflow_status}")
 
         if unexpected_error is not None:
             raise unexpected_error
@@ -501,11 +544,13 @@ class WorkflowOrchestrator:
         pause_after_each_round: bool | None = None,
         max_changed_lines: int | None = None,
         max_changed_files: int | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> WorkflowRunResult:
         root = Path(project_root).expanduser().resolve()
         round_status_path = root / "state" / "round_status.json"
         round_status = self._read_json(round_status_path)
         from_round = self._resolve_resume_from_round(round_status=round_status)
+        self._emit_progress(progress_callback, f"[workflow] 恢复流程请求，目标轮次：{to_round}")
         if from_round is None:
             session_path = root / "state" / "session.json"
             session_payload = self._read_json(session_path)
@@ -534,12 +579,14 @@ class WorkflowOrchestrator:
                 workflow_result_path=done_dir / "workflow_result.json",
             )
             self._write_json(result.workflow_result_path, result.to_dict())
+            self._emit_progress(progress_callback, "[workflow] 无需恢复，当前已完成全部轮次")
             return result
 
         if RUN_ORDER.index(from_round) > RUN_ORDER.index(to_round):
             raise ValueError(
                 f"无法恢复到 {to_round}: 当前应从 {from_round} 开始，请选择不早于 {from_round} 的目标轮次"
             )
+        self._emit_progress(progress_callback, f"[workflow] 将从 {from_round} 恢复到 {to_round}")
 
         return self.run(
             project_root=root,
@@ -555,6 +602,7 @@ class WorkflowOrchestrator:
             pause_after_each_round=pause_after_each_round,
             max_changed_lines=max_changed_lines,
             max_changed_files=max_changed_files,
+            progress_callback=progress_callback,
         )
 
     def _select_rounds(self, *, from_round: RoundName, to_round: RoundName) -> list[RoundName]:
@@ -701,6 +749,32 @@ class WorkflowOrchestrator:
             "snapshot hash verification failed: "
             f"{first.get('reason', 'unknown')} @ {first.get('path', '')}"
         )
+
+    def _emit_progress(
+        self,
+        progress_callback: Callable[[str], None] | None,
+        message: str,
+    ) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(message)
+        except Exception:
+            return
+
+    def _round_progress(
+        self,
+        progress_callback: Callable[[str], None] | None,
+        *,
+        round_name: RoundName,
+    ) -> Callable[[str], None] | None:
+        if progress_callback is None:
+            return None
+
+        def _emit(message: str) -> None:
+            self._emit_progress(progress_callback, f"[{round_name}] {message}")
+
+        return _emit
 
     def _read_json(self, path: Path) -> dict[str, Any]:
         try:

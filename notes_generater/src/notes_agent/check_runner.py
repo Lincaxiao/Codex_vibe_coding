@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 DEFAULT_CHECK_TIMEOUT_SECONDS = 5 * 60
 
@@ -50,6 +50,7 @@ class CheckRunner:
         project_root: Path | str,
         notes_root: Path | str,
         output_path: Path | str | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> CheckRunResult:
         project = Path(project_root).expanduser().resolve()
         notes = Path(notes_root).expanduser().resolve()
@@ -57,6 +58,10 @@ class CheckRunner:
         if not check_script.exists():
             raise FileNotFoundError(f"check script not found: {check_script}")
 
+        self._emit_progress(
+            progress_callback,
+            f"[check] 开始执行检查脚本：{check_script}",
+        )
         started_at = _now_iso()
         timed_out = False
         try:
@@ -77,6 +82,7 @@ class CheckRunner:
             stderr = self._timeout_output_text(exc.stderr)
             timeout_error = f"check script timed out after {self.timeout_seconds}s"
             stderr = f"{stderr}\n{timeout_error}".strip()
+            self._emit_progress(progress_callback, f"[check] 执行超时（>{self.timeout_seconds}s）")
         finished_at = _now_iso()
 
         payload = self._parse_json_payload(stdout) if not timed_out else None
@@ -90,9 +96,14 @@ class CheckRunner:
             finished_at=finished_at,
             check_script_path=check_script,
         )
+        self._emit_progress(
+            progress_callback,
+            f"[check] 执行完成：passed={result.passed}, exit_code={result.exit_code}",
+        )
 
         if output_path:
             self._write_json(Path(output_path), result.to_dict())
+            self._emit_progress(progress_callback, f"[check] 结果已写入：{Path(output_path)}")
         return result
 
     def _parse_json_payload(self, stdout: str) -> dict[str, Any] | None:
@@ -118,3 +129,15 @@ class CheckRunner:
         if isinstance(value, bytes):
             return value.decode("utf-8", errors="replace")
         return value
+
+    def _emit_progress(
+        self,
+        progress_callback: Callable[[str], None] | None,
+        message: str,
+    ) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(message)
+        except Exception:
+            return

@@ -238,6 +238,34 @@ class CodexExecutorTests(unittest.TestCase):
         assert result.error is not None
         self.assertIn("failed to launch codex", result.error)
 
+    def test_run_emits_progress_messages(self) -> None:
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            if cmd[:2] == ["codex", "--version"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="codex-cli 0.100.0-alpha.10\n", stderr="")
+            if cmd[0] == "codex" and "exec" in cmd:
+                output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+                output_path.write_text("ok\n", encoding="utf-8")
+                return subprocess.CompletedProcess(cmd, 0, stdout="done\n", stderr="")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        messages: list[str] = []
+        with mock.patch("notes_agent.codex_executor.subprocess.run", side_effect=fake_run):
+            result = self.executor.run(
+                CodexRunRequest(
+                    project_root=self.project_root,
+                    notes_root=self.notes_root,
+                    prompt="进度日志测试",
+                    run_id="run_progress",
+                ),
+                progress_callback=messages.append,
+            )
+
+        self.assertTrue(result.success)
+        self.assertTrue(any("启动 run_id=run_progress" in item for item in messages))
+        self.assertTrue(any("attempt 1/" in item and "开始" in item for item in messages))
+        self.assertTrue(any("attempt 1 成功" in item for item in messages))
+        self.assertTrue(any("结束 success=True" in item for item in messages))
+
 
 if __name__ == "__main__":
     unittest.main()

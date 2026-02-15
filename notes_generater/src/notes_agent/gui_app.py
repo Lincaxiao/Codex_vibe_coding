@@ -66,20 +66,24 @@ def main() -> int:
     class TaskWorker(QObject):  # type: ignore[misc]
         finished = Signal(object)
         failed = Signal(str)
+        progress = Signal(str)
 
-        def __init__(self, fn: Callable[[], Any]) -> None:
+        def __init__(self, fn: Callable[[Callable[[str], None]], Any]) -> None:
             super().__init__()
             self._fn = fn
 
         def run(self) -> None:
             try:
-                result = self._fn()
+                result = self._fn(self._emit_progress)
                 self.finished.emit(result)
             except Exception as exc:
                 if isinstance(exc, ValueError):
                     self.failed.emit(str(exc))
                 else:
                     self.failed.emit(traceback.format_exc())
+
+        def _emit_progress(self, message: str) -> None:
+            self.progress.emit(message)
 
     class MainWindow(QMainWindow):  # type: ignore[misc]
         def __init__(self) -> None:
@@ -570,15 +574,18 @@ def main() -> int:
             if not config:
                 return
 
-            def task() -> dict[str, Any]:
+            def task(progress: Callable[[str], None]) -> dict[str, Any]:
+                progress("[round0] 开始初始化")
                 init_result = self.round0_initializer.initialize(
                     project_root=config.project_root,
                     notes_root=config.notes_root,
                     course_id=config.course_id,
                 )
+                progress("[round0] 初始化完成，开始检查")
                 check_result = self.check_runner.run(
                     project_root=config.project_root,
                     notes_root=config.notes_root,
+                    progress_callback=progress,
                 )
                 return {"init": init_result.to_dict(), "check": check_result.to_dict()}
 
@@ -596,7 +603,7 @@ def main() -> int:
             search_enabled = self.search_check.isChecked()
             pause_each_round = self.pause_each_round_check.isChecked()
 
-            def task() -> dict[str, Any]:
+            def task(progress: Callable[[str], None]) -> dict[str, Any]:
                 result = self.workflow_orchestrator.run(
                     project_root=config.project_root,
                     notes_root=config.notes_root,
@@ -607,6 +614,7 @@ def main() -> int:
                     pause_after_each_round=pause_each_round,
                     max_changed_lines=max_lines,
                     max_changed_files=max_files,
+                    progress_callback=progress,
                 )
                 return result.to_dict()
 
@@ -624,7 +632,7 @@ def main() -> int:
             search_enabled = self.search_check.isChecked()
             pause_each_round = self.pause_each_round_check.isChecked()
 
-            def task() -> dict[str, Any]:
+            def task(progress: Callable[[str], None]) -> dict[str, Any]:
                 result = self.workflow_orchestrator.resume(
                     project_root=config.project_root,
                     notes_root=config.notes_root,
@@ -634,6 +642,7 @@ def main() -> int:
                     pause_after_each_round=pause_each_round,
                     max_changed_lines=max_lines,
                     max_changed_files=max_files,
+                    progress_callback=progress,
                 )
                 return result.to_dict()
 
@@ -645,10 +654,11 @@ def main() -> int:
             if not config:
                 return
 
-            def task() -> dict[str, Any]:
+            def task(progress: Callable[[str], None]) -> dict[str, Any]:
                 return self.check_runner.run(
                     project_root=config.project_root,
                     notes_root=config.notes_root,
+                    progress_callback=progress,
                 ).to_dict()
 
             self._run_task("执行检查", task)
@@ -699,7 +709,7 @@ def main() -> int:
                 return
             self._log(patch)
 
-        def _run_task(self, title: str, fn: Callable[[], Any]) -> None:
+        def _run_task(self, title: str, fn: Callable[[Callable[[str], None]], Any]) -> None:
             self._set_status(f"执行中: {title}", running=True)
             worker = TaskWorker(fn)
             thread = QThread(self)
@@ -716,8 +726,13 @@ def main() -> int:
                 self._error(err)
                 thread.quit()
 
+            def on_progress(message: str) -> None:
+                self._set_status(message, running=True)
+                self._log(message)
+
             worker.finished.connect(on_finished)
             worker.failed.connect(on_failed)
+            worker.progress.connect(on_progress)
             thread.finished.connect(thread.deleteLater)
             thread.finished.connect(worker.deleteLater)
             thread.finished.connect(lambda: self._threads.remove(thread) if thread in self._threads else None)

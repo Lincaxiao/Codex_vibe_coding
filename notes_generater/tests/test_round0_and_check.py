@@ -122,6 +122,23 @@ class Round0AndCheckTests(unittest.TestCase):
         self.assertIsNone(result.payload)
         self.assertIn("timed out", result.stderr)
 
+    def test_check_runner_emits_progress_messages(self) -> None:
+        self.round0_initializer.initialize(
+            project_root=self.project_root,
+            notes_root=self.notes_root,
+            course_id="round0-test",
+        )
+        messages: list[str] = []
+        result = self.check_runner.run(
+            project_root=self.project_root,
+            notes_root=self.notes_root,
+            progress_callback=messages.append,
+        )
+
+        self.assertTrue(result.passed)
+        self.assertTrue(any("[check] 开始执行检查脚本" in item for item in messages))
+        self.assertTrue(any("[check] 执行完成：passed=True" in item for item in messages))
+
 
 if __name__ == "__main__":
     unittest.main()

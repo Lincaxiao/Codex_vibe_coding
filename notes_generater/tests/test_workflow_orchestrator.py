@@ -4,6 +4,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Callable
 
 from notes_agent.check_runner import CheckRunResult, CheckRunner
 from notes_agent.codex_executor import CodexRunRequest, CodexRunResult
@@ -26,7 +27,12 @@ class FakeCodexExecutor:
         self.mutate_rel_path = mutate_rel_path
         self.calls: list[CodexRunRequest] = []
 
-    def run(self, request: CodexRunRequest) -> CodexRunResult:
+    def run(
+        self,
+        request: CodexRunRequest,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> CodexRunResult:
         self.calls.append(request)
         run_id = request.run_id or "missing-run-id"
         run_dir = request.project_root / "runs" / run_id
@@ -62,7 +68,12 @@ class FakeCodexExecutor:
 
 
 class RaisingCodexExecutor:
-    def run(self, request: CodexRunRequest) -> CodexRunResult:
+    def run(
+        self,
+        request: CodexRunRequest,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> CodexRunResult:
         raise RuntimeError("boom during codex execution")
 
 
@@ -71,7 +82,14 @@ class FakeCheckRunner:
         self.outcomes = outcomes or [True]
         self.calls = 0
 
-    def run(self, *, project_root: Path | str, notes_root: Path | str, output_path: Path | str | None = None) -> CheckRunResult:
+    def run(
+        self,
+        *,
+        project_root: Path | str,
+        notes_root: Path | str,
+        output_path: Path | str | None = None,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> CheckRunResult:
         index = min(self.calls, len(self.outcomes) - 1)
         passed = self.outcomes[index]
         self.calls += 1
@@ -521,6 +539,30 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             allow_external_refs=True,
         )
         self.assertTrue(fake_executor.calls[0].search_enabled)
+
+    def test_workflow_emits_progress_messages(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True)
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        messages: list[str] = []
+
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            workflow_run_id="wf_progress",
+            progress_callback=messages.append,
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertTrue(any("[workflow] 启动 workflow_id=wf_progress" in item for item in messages))
+        self.assertTrue(any("[workflow] round1 开始" in item for item in messages))
+        self.assertTrue(any("[round1] 调用 Codex" in item for item in messages))
+        self.assertTrue(any("[workflow] 结束，状态：succeeded" in item for item in messages))
 
 
 if __name__ == "__main__":

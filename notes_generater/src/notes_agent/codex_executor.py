@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .path_utils import validate_path_component
 
@@ -76,7 +76,12 @@ class CodexExecutor:
         self.exec_timeout_seconds = exec_timeout_seconds
         self.version_timeout_seconds = version_timeout_seconds
 
-    def run(self, request: CodexRunRequest) -> CodexRunResult:
+    def run(
+        self,
+        request: CodexRunRequest,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> CodexRunResult:
         if request.max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {request.max_retries}")
 
@@ -95,6 +100,10 @@ class CodexExecutor:
         last_message_path = run_dir / "codex_last_message.md"
         run_manifest_path = run_dir / "run_manifest.json"
         prompt_path.write_text(request.prompt, encoding="utf-8")
+        self._emit_progress(
+            progress_callback,
+            f"[codex] 启动 run_id={run_id}，最多尝试 {request.max_retries + 1} 次",
+        )
 
         codex_version = self._read_codex_version()
         attempts_log: list[dict[str, Any]] = []
@@ -104,6 +113,10 @@ class CodexExecutor:
 
         for attempt in range(1, request.max_retries + 2):
             started_at = _now_iso()
+            self._emit_progress(
+                progress_callback,
+                f"[codex] attempt {attempt}/{request.max_retries + 1} 开始",
+            )
             command = self._build_command(
                 request=request,
                 project_root=project_root,
@@ -132,10 +145,15 @@ class CodexExecutor:
                     self._timeout_output_text(exc.stderr),
                 )
                 stdio = f"{stdio}\n{timeout_error}".strip()
+                self._emit_progress(
+                    progress_callback,
+                    f"[codex] attempt {attempt} 超时（>{self.exec_timeout_seconds}s）",
+                )
             except OSError as exc:
                 exit_code = 127
                 launch_error = f"failed to launch codex: {exc}"
                 stdio = launch_error
+                self._emit_progress(progress_callback, f"[codex] 启动失败：{exc}")
             ended_at = _now_iso()
             final_exit_code = exit_code
             combined_stdout_log.append(
@@ -154,6 +172,7 @@ class CodexExecutor:
 
             if exit_code == 0:
                 final_error = None
+                self._emit_progress(progress_callback, f"[codex] attempt {attempt} 成功")
                 break
 
             if launch_error is not None:
@@ -162,7 +181,16 @@ class CodexExecutor:
                 final_error = timeout_error if timed_out else self._extract_error(stdio) or f"codex exited with {exit_code}"
             if attempt <= request.max_retries and (timed_out or self._is_retryable_failure(stdio)):
                 attempts_log[-1]["retry_reason"] = "timeout" if timed_out else "retryable_failure"
+                reason = "timeout" if timed_out else "retryable_failure"
+                self._emit_progress(
+                    progress_callback,
+                    f"[codex] attempt {attempt} 失败（{reason}），准备重试",
+                )
                 continue
+            self._emit_progress(
+                progress_callback,
+                f"[codex] attempt {attempt} 失败（exit_code={exit_code}）",
+            )
             break
 
         stdout_log_path.write_text("".join(combined_stdout_log), encoding="utf-8")
@@ -187,6 +215,10 @@ class CodexExecutor:
             "created_at": _now_iso(),
         }
         self._write_json(run_manifest_path, manifest)
+        self._emit_progress(
+            progress_callback,
+            f"[codex] 结束 success={final_exit_code == 0}，日志目录：{run_dir}",
+        )
 
         return CodexRunResult(
             run_id=run_id,
@@ -200,6 +232,18 @@ class CodexExecutor:
             run_manifest_path=run_manifest_path,
             error=final_error,
         )
+
+    def _emit_progress(
+        self,
+        progress_callback: Callable[[str], None] | None,
+        message: str,
+    ) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(message)
+        except Exception:
+            return
 
     def _build_command(
         self,
