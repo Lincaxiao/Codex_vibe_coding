@@ -26,25 +26,25 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "better-sqlite3": "^11.8.1",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "ulid": "^2.4.0"
+    "better-sqlite3": "^12.6.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "ulid": "^3.0.2"
   },
   "devDependencies": {
-    "@playwright/test": "^1.51.0",
-    "@types/better-sqlite3": "^7.6.11",
-    "@types/node": "^22.13.1",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.4",
-    "concurrently": "^9.1.2",
-    "cross-env": "^7.0.3",
-    "electron": "^34.0.2",
-    "electron-builder": "^25.1.8",
-    "typescript": "^5.7.3",
-    "vite": "^6.1.0",
-    "vitest": "^3.0.7",
-    "wait-on": "^8.0.2"
+    "@playwright/test": "^1.58.2",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.2.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^40.4.1",
+    "electron-builder": "^26.7.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vitest": "^4.0.18",
+    "wait-on": "^9.0.4"
   }
 }
