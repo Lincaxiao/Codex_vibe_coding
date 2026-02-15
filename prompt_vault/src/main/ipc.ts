@@ -1,14 +1,15 @@
-import { clipboard, ipcMain } from "electron";
+import { clipboard, dialog, ipcMain } from "electron";
 
 import type {
+  PickExportPathInput,
   PromptListInput,
   PromptRenderInput,
   PromptUpsertInput,
   Result,
-  VaultApi,
 } from "../shared/types";
 import { fail, ok, toAppError } from "./errors";
 import { getHealthPayload } from "./health";
+import { exportToJson, exportToMarkdown, importFromJson } from "./importExportService";
 import {
   createPrompt,
   getPrompt,
@@ -35,6 +36,11 @@ export function registerIpcHandlers(): void {
   ipcMain.removeHandler("vault:prompt:softDelete");
   ipcMain.removeHandler("vault:prompt:render");
   ipcMain.removeHandler("vault:prompt:copyRendered");
+  ipcMain.removeHandler("vault:prompt:importJson");
+  ipcMain.removeHandler("vault:prompt:exportJson");
+  ipcMain.removeHandler("vault:prompt:exportMarkdown");
+  ipcMain.removeHandler("vault:dialog:pickImportFile");
+  ipcMain.removeHandler("vault:dialog:pickExportPath");
 
   ipcMain.handle("vault:health", () => safeRun(() => getHealthPayload()));
 
@@ -91,6 +97,49 @@ export function registerIpcHandlers(): void {
       return { copied: true as const, content };
     })
   );
-}
 
-export const _typeGuard: VaultApi | null = null;
+  ipcMain.handle("vault:prompt:importJson", (_event, payload: { inputPath: string }) =>
+    safeRun(() => importFromJson(payload.inputPath))
+  );
+
+  ipcMain.handle(
+    "vault:prompt:exportJson",
+    (_event, payload: { outputPath: string; includeDeleted: boolean }) =>
+      safeRun(() => exportToJson(payload.outputPath, payload.includeDeleted))
+  );
+
+  ipcMain.handle(
+    "vault:prompt:exportMarkdown",
+    (_event, payload: { outputPath: string; includeDeleted: boolean }) =>
+      safeRun(() => exportToMarkdown(payload.outputPath, payload.includeDeleted))
+  );
+
+  ipcMain.handle("vault:dialog:pickImportFile", () =>
+    safeRun(() => {
+      const result = dialog.showOpenDialogSync({
+        properties: ["openFile"],
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+
+      if (!result || result.length === 0) {
+        throw new Error("已取消操作");
+      }
+      return { path: result[0] };
+    })
+  );
+
+  ipcMain.handle("vault:dialog:pickExportPath", (_event, input: PickExportPathInput) =>
+    safeRun(() => {
+      const ext = input.format === "markdown" ? "md" : "json";
+      const result = dialog.showSaveDialogSync({
+        defaultPath: input.defaultPath,
+        filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+      });
+
+      if (!result) {
+        throw new Error("已取消操作");
+      }
+      return { path: result };
+    })
+  );
+}

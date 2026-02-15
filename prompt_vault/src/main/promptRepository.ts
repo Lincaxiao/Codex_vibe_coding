@@ -118,8 +118,48 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-export function listPrompts(input: ListPromptInput): ListPromptOutput {
+function listFromRows(
+  whereClause: string,
+  params: Array<string | number>,
+  options?: { limit?: number; offset?: number }
+): ListPromptOutput {
   const db = getDb();
+  const totalRow = db
+    .prepare(`SELECT COUNT(*) AS total FROM prompts p ${whereClause}`)
+    .get(...params) as { total: number };
+
+  const limitSql = options?.limit !== undefined ? "LIMIT ? OFFSET ?" : "";
+  const listParams = [...params];
+  if (options?.limit !== undefined) {
+    listParams.push(options.limit, options.offset ?? 0);
+  }
+
+  const items = db
+    .prepare(
+      `
+      SELECT p.id, p.title, p.body, p.is_deleted, p.created_at, p.updated_at
+      FROM prompts p
+      ${whereClause}
+      ORDER BY p.updated_at DESC
+      ${limitSql}
+      `
+    )
+    .all(...listParams) as Array<{
+    id: string;
+    title: string;
+    body: string;
+    is_deleted: number;
+    created_at: string;
+    updated_at: string;
+  }>;
+
+  return {
+    total: totalRow.total,
+    items: items.map(mapPromptRow),
+  };
+}
+
+export function listPrompts(input: ListPromptInput): ListPromptOutput {
   const query = input.query.trim();
   const limit = Math.max(1, Math.min(input.limit, 200));
   const offset = Math.max(0, input.offset);
@@ -137,34 +177,12 @@ export function listPrompts(input: ListPromptInput): ListPromptOutput {
   }
 
   const whereClause = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+  return listFromRows(whereClause, params, { limit, offset });
+}
 
-  const totalRow = db
-    .prepare(`SELECT COUNT(*) AS total FROM prompts p ${whereClause}`)
-    .get(...params) as { total: number };
-
-  const items = db
-    .prepare(
-      `
-      SELECT p.id, p.title, p.body, p.is_deleted, p.created_at, p.updated_at
-      FROM prompts p
-      ${whereClause}
-      ORDER BY p.updated_at DESC
-      LIMIT ? OFFSET ?
-      `
-    )
-    .all(...params, limit, offset) as Array<{
-    id: string;
-    title: string;
-    body: string;
-    is_deleted: number;
-    created_at: string;
-    updated_at: string;
-  }>;
-
-  return {
-    total: totalRow.total,
-    items: items.map(mapPromptRow),
-  };
+export function listAllPrompts(includeDeleted: boolean): PromptRecord[] {
+  const whereClause = includeDeleted ? "" : "WHERE p.is_deleted = 0";
+  return listFromRows(whereClause, []).items;
 }
 
 export function getPrompt(promptId: string): PromptRecord | null {
@@ -186,6 +204,14 @@ export function getPrompt(promptId: string): PromptRecord | null {
     return null;
   }
   return mapPromptRow(row);
+}
+
+export function promptExistsByTitleBody(title: string, body: string): boolean {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT id FROM prompts WHERE title = ? AND body = ? LIMIT 1")
+    .get(title, body) as { id: string } | undefined;
+  return Boolean(row);
 }
 
 export function createPrompt(input: PromptUpsertInput): PromptRecord {

@@ -1,9 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { IpcRendererEvent } from "electron";
 
 import type {
   ExportJsonInput,
   ExportMarkdownInput,
   ImportJsonInput,
+  MenuCommand,
+  PickExportPathInput,
   PromptListInput,
   PromptRenderInput,
   PromptUpsertInput,
@@ -26,21 +29,22 @@ const vaultApi: VaultApi = {
     softDelete: (promptId: string) => invoke("vault:prompt:softDelete", promptId),
     render: (input: PromptRenderInput) => invoke("vault:prompt:render", input),
     copyRendered: (input: PromptRenderInput) => invoke("vault:prompt:copyRendered", input),
-    importJson: (_input: ImportJsonInput) =>
-      Promise.resolve({
-        ok: false,
-        error: { code: "INTERNAL_ERROR", message: "importJson 尚未实现" },
-      }),
-    exportJson: (_input: ExportJsonInput) =>
-      Promise.resolve({
-        ok: false,
-        error: { code: "INTERNAL_ERROR", message: "exportJson 尚未实现" },
-      }),
-    exportMarkdown: (_input: ExportMarkdownInput) =>
-      Promise.resolve({
-        ok: false,
-        error: { code: "INTERNAL_ERROR", message: "exportMarkdown 尚未实现" },
-      }),
+    importJson: (input: ImportJsonInput) => invoke("vault:prompt:importJson", input),
+    exportJson: (input: ExportJsonInput) => invoke("vault:prompt:exportJson", input),
+    exportMarkdown: (input: ExportMarkdownInput) => invoke("vault:prompt:exportMarkdown", input),
+  },
+  dialog: {
+    pickImportFile: () => invoke("vault:dialog:pickImportFile"),
+    pickExportPath: (input: PickExportPathInput) => invoke("vault:dialog:pickExportPath", input),
+  },
+  events: {
+    onMenuCommand: (listener: (command: MenuCommand) => void) => {
+      const wrapped = (_event: IpcRendererEvent, command: MenuCommand) => listener(command);
+      ipcRenderer.on("vault:menu-command", wrapped);
+      return () => {
+        ipcRenderer.removeListener("vault:menu-command", wrapped);
+      };
+    },
   },
 };
 

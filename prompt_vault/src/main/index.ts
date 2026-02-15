@@ -3,6 +3,7 @@ import { app, BrowserWindow } from "electron";
 
 import { closeDb, getDb } from "./db";
 import { registerIpcHandlers } from "./ipc";
+import { installAppMenu } from "./menu";
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -32,6 +33,7 @@ function createMainWindow(): BrowserWindow {
 app.whenReady().then(() => {
   getDb();
   registerIpcHandlers();
+  installAppMenu();
   createMainWindow();
 
   app.on("activate", () => {

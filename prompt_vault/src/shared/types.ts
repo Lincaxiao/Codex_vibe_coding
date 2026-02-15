@@ -92,6 +92,21 @@ export type ExportOutput = {
   outputPath: string;
 };
 
+export type PickImportFileOutput = {
+  path: string;
+};
+
+export type PickExportPathInput = {
+  format: "json" | "markdown";
+  defaultPath?: string;
+};
+
+export type PickExportPathOutput = {
+  path: string;
+};
+
+export type MenuCommand = "new" | "save" | "focus-search";
+
 export type VaultApi = {
   health: () => Promise<Result<HealthPayload>>;
   prompt: {
@@ -105,5 +120,12 @@ export type VaultApi = {
     importJson: (input: ImportJsonInput) => Promise<Result<ImportJsonOutput>>;
     exportJson: (input: ExportJsonInput) => Promise<Result<ExportOutput>>;
     exportMarkdown: (input: ExportMarkdownInput) => Promise<Result<ExportOutput>>;
+  };
+  dialog: {
+    pickImportFile: () => Promise<Result<PickImportFileOutput>>;
+    pickExportPath: (input: PickExportPathInput) => Promise<Result<PickExportPathOutput>>;
+  };
+  events: {
+    onMenuCommand: (listener: (command: MenuCommand) => void) => () => void;
   };
 };

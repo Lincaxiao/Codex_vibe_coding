@@ -1,6 +1,7 @@
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { Prompt } from "../shared/types";
+import type { MenuCommand, Prompt } from "../shared/types";
 import { formatDate, parseTags, parseVariables } from "./utils";
 
 type FormState = {
@@ -15,10 +16,38 @@ const EMPTY_FORM: FormState = {
   body: "",
 };
 
+function Modal(props: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  footer: ReactNode;
+}) {
+  if (!props.open) {
+    return null;
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={props.onClose}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <strong>{props.title}</strong>
+          <button className="btn ghost" onClick={props.onClose}>
+            关闭
+          </button>
+        </div>
+        <div className="modal-body">{props.children}</div>
+        <div className="modal-foot">{props.footer}</div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const searchRef = useRef<HTMLInputElement>(null);
 
   const [status, setStatus] = useState("就绪");
+  const [toast, setToast] = useState("");
   const [query, setQuery] = useState("");
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [items, setItems] = useState<Prompt[]>([]);
@@ -32,10 +61,24 @@ export default function App() {
   const [renderOutput, setRenderOutput] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [importPath, setImportPath] = useState("");
+
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState<"json" | "markdown">("json");
+  const [exportPath, setExportPath] = useState("prompt_vault_export.json");
+  const [exportIncludeDeleted, setExportIncludeDeleted] = useState(false);
+
   const selectedMeta = useMemo(
     () => items.find((item) => item.id === selectedId) ?? null,
     [items, selectedId]
   );
+
+  const notify = useCallback((message: string) => {
+    setStatus(message);
+    setToast(message);
+    window.setTimeout(() => setToast(""), 2200);
+  }, []);
 
   const loadList = useCallback(async () => {
     setBusy(true);
@@ -48,7 +91,7 @@ export default function App() {
     setBusy(false);
 
     if (!result.ok) {
-      setStatus(result.error.message);
+      notify(result.error.message);
       return;
     }
 
@@ -71,25 +114,224 @@ export default function App() {
     if (!exists) {
       setSelectedId(result.data.items[0].id);
     }
-  }, [includeDeleted, isCreating, query, selectedId]);
+  }, [includeDeleted, isCreating, notify, query, selectedId]);
 
-  const loadDetail = useCallback(async (promptId: string) => {
-    setBusy(true);
-    const result = await window.vault.prompt.get(promptId);
-    setBusy(false);
+  const loadDetail = useCallback(
+    async (promptId: string) => {
+      setBusy(true);
+      const result = await window.vault.prompt.get(promptId);
+      setBusy(false);
 
-    if (!result.ok) {
-      setStatus(result.error.message);
+      if (!result.ok) {
+        notify(result.error.message);
+        return;
+      }
+
+      setForm({
+        title: result.data.title,
+        tags: result.data.tags.join(", "),
+        body: result.data.body,
+      });
+      setStatus(`已加载 ${result.data.id}`);
+    },
+    [notify]
+  );
+
+  const createNew = useCallback(() => {
+    setIsCreating(true);
+    setSelectedId(null);
+    setForm(EMPTY_FORM);
+    setRenderOutput("");
+    setStatus("已切换到新建模式");
+  }, []);
+
+  const onSubmit = useCallback(async () => {
+    const payload = {
+      title: form.title.trim(),
+      body: form.body,
+      tags: parseTags(form.tags),
+    };
+
+    if (!payload.title) {
+      notify("标题不能为空");
+      return;
+    }
+    if (!payload.body.trim()) {
+      notify("正文不能为空");
       return;
     }
 
-    setForm({
-      title: result.data.title,
-      tags: result.data.tags.join(", "),
-      body: result.data.body,
+    setBusy(true);
+    if (isCreating || !selectedId) {
+      const result = await window.vault.prompt.create(payload);
+      setBusy(false);
+      if (!result.ok) {
+        notify(result.error.message);
+        return;
+      }
+      notify(`已创建 ${result.data.id}`);
+      setIsCreating(false);
+      setSelectedId(result.data.id);
+      await loadList();
+      return;
+    }
+
+    const result = await window.vault.prompt.update(selectedId, payload);
+    setBusy(false);
+    if (!result.ok) {
+      notify(result.error.message);
+      return;
+    }
+
+    notify(`已保存 ${result.data.id}`);
+    await loadList();
+  }, [form.body, form.tags, form.title, isCreating, loadList, notify, selectedId]);
+
+  const onDelete = useCallback(async () => {
+    if (!selectedId || isCreating) {
+      notify("请先选择一条记录");
+      return;
+    }
+    setBusy(true);
+    const result = await window.vault.prompt.softDelete(selectedId);
+    setBusy(false);
+    if (!result.ok) {
+      notify(result.error.message);
+      return;
+    }
+
+    notify("已软删除");
+    setSelectedId(null);
+    setRenderOutput("");
+    await loadList();
+  }, [isCreating, loadList, notify, selectedId]);
+
+  const onRender = useCallback(async () => {
+    if (!selectedId || isCreating) {
+      notify("请先选择一条记录");
+      return;
+    }
+
+    let variables: Record<string, string>;
+    try {
+      variables = parseVariables(renderVars);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "变量解析失败");
+      return;
+    }
+
+    setBusy(true);
+    const result = await window.vault.prompt.render({
+      promptId: selectedId,
+      variables,
     });
-    setStatus(`已加载 ${result.data.id}`);
-  }, []);
+    setBusy(false);
+
+    if (!result.ok) {
+      notify(result.error.message);
+      return;
+    }
+
+    setRenderOutput(result.data.content);
+    notify("渲染完成");
+  }, [isCreating, notify, renderVars, selectedId]);
+
+  const onCopy = useCallback(async () => {
+    if (!selectedId || isCreating) {
+      notify("请先选择一条记录");
+      return;
+    }
+
+    let variables: Record<string, string>;
+    try {
+      variables = parseVariables(renderVars);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "变量解析失败");
+      return;
+    }
+
+    setBusy(true);
+    const result = await window.vault.prompt.copyRendered({
+      promptId: selectedId,
+      variables,
+    });
+    setBusy(false);
+
+    if (!result.ok) {
+      notify(result.error.message);
+      return;
+    }
+
+    setRenderOutput(result.data.content);
+    notify("已复制渲染结果");
+  }, [isCreating, notify, renderVars, selectedId]);
+
+  const onPickImportFile = useCallback(async () => {
+    const result = await window.vault.dialog.pickImportFile();
+    if (!result.ok) {
+      notify(result.error.message);
+      return;
+    }
+    setImportPath(result.data.path);
+  }, [notify]);
+
+  const onConfirmImport = useCallback(async () => {
+    const path = importPath.trim();
+    if (!path) {
+      notify("导入路径不能为空");
+      return;
+    }
+
+    setBusy(true);
+    const result = await window.vault.prompt.importJson({ inputPath: path });
+    setBusy(false);
+    if (!result.ok) {
+      notify(result.error.message);
+      return;
+    }
+
+    setImportModalOpen(false);
+    notify(`导入完成：新增 ${result.data.added}，跳过 ${result.data.skipped}`);
+    await loadList();
+  }, [importPath, loadList, notify]);
+
+  const onPickExportPath = useCallback(async () => {
+    const result = await window.vault.dialog.pickExportPath({
+      format: exportFormat,
+      defaultPath: exportPath,
+    });
+    if (!result.ok) {
+      notify(result.error.message);
+      return;
+    }
+    setExportPath(result.data.path);
+  }, [exportFormat, exportPath, notify]);
+
+  const onConfirmExport = useCallback(async () => {
+    const path = exportPath.trim();
+    if (!path) {
+      notify("导出路径不能为空");
+      return;
+    }
+
+    setBusy(true);
+    const result =
+      exportFormat === "json"
+        ? await window.vault.prompt.exportJson({ outputPath: path, includeDeleted: exportIncludeDeleted })
+        : await window.vault.prompt.exportMarkdown({
+            outputPath: path,
+            includeDeleted: exportIncludeDeleted,
+          });
+    setBusy(false);
+
+    if (!result.ok) {
+      notify(result.error.message);
+      return;
+    }
+
+    setExportModalOpen(false);
+    notify(`导出完成：${result.data.outputPath}`);
+  }, [exportFormat, exportIncludeDeleted, exportPath, notify]);
 
   useEffect(() => {
     void loadList();
@@ -115,11 +357,7 @@ export default function App() {
         searchRef.current?.focus();
       } else if (key === "n") {
         event.preventDefault();
-        setIsCreating(true);
-        setSelectedId(null);
-        setForm(EMPTY_FORM);
-        setRenderOutput("");
-        setStatus("已切换到新建模式");
+        createNew();
       } else if (key === "s") {
         event.preventDefault();
         void onSubmit();
@@ -128,128 +366,20 @@ export default function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  });
+  }, [createNew, onSubmit]);
 
-  const onSubmit = async () => {
-    const payload = {
-      title: form.title.trim(),
-      body: form.body,
-      tags: parseTags(form.tags),
-    };
-
-    if (!payload.title) {
-      setStatus("标题不能为空");
-      return;
-    }
-    if (!payload.body.trim()) {
-      setStatus("正文不能为空");
-      return;
-    }
-
-    setBusy(true);
-    if (isCreating || !selectedId) {
-      const result = await window.vault.prompt.create(payload);
-      setBusy(false);
-      if (!result.ok) {
-        setStatus(result.error.message);
-        return;
+  useEffect(() => {
+    const off = window.vault.events.onMenuCommand((command: MenuCommand) => {
+      if (command === "new") {
+        createNew();
+      } else if (command === "save") {
+        void onSubmit();
+      } else if (command === "focus-search") {
+        searchRef.current?.focus();
       }
-      setStatus(`已创建 ${result.data.id}`);
-      setIsCreating(false);
-      setSelectedId(result.data.id);
-      await loadList();
-      return;
-    }
-
-    const result = await window.vault.prompt.update(selectedId, payload);
-    setBusy(false);
-    if (!result.ok) {
-      setStatus(result.error.message);
-      return;
-    }
-
-    setStatus(`已保存 ${result.data.id}`);
-    await loadList();
-  };
-
-  const onDelete = async () => {
-    if (!selectedId || isCreating) {
-      setStatus("请先选择一条记录");
-      return;
-    }
-    setBusy(true);
-    const result = await window.vault.prompt.softDelete(selectedId);
-    setBusy(false);
-    if (!result.ok) {
-      setStatus(result.error.message);
-      return;
-    }
-
-    setStatus("已软删除");
-    setSelectedId(null);
-    setRenderOutput("");
-    await loadList();
-  };
-
-  const onRender = async () => {
-    if (!selectedId || isCreating) {
-      setStatus("请先选择一条记录");
-      return;
-    }
-
-    let variables: Record<string, string>;
-    try {
-      variables = parseVariables(renderVars);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "变量解析失败");
-      return;
-    }
-
-    setBusy(true);
-    const result = await window.vault.prompt.render({
-      promptId: selectedId,
-      variables,
     });
-    setBusy(false);
-
-    if (!result.ok) {
-      setStatus(result.error.message);
-      return;
-    }
-
-    setRenderOutput(result.data.content);
-    setStatus("渲染完成");
-  };
-
-  const onCopy = async () => {
-    if (!selectedId || isCreating) {
-      setStatus("请先选择一条记录");
-      return;
-    }
-
-    let variables: Record<string, string>;
-    try {
-      variables = parseVariables(renderVars);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "变量解析失败");
-      return;
-    }
-
-    setBusy(true);
-    const result = await window.vault.prompt.copyRendered({
-      promptId: selectedId,
-      variables,
-    });
-    setBusy(false);
-
-    if (!result.ok) {
-      setStatus(result.error.message);
-      return;
-    }
-
-    setRenderOutput(result.data.content);
-    setStatus("已复制渲染结果");
-  };
+    return off;
+  }, [createNew, onSubmit]);
 
   return (
     <div className="shell">
@@ -262,17 +392,13 @@ export default function App() {
           <button className="btn ghost" onClick={() => void loadList()} disabled={busy}>
             刷新
           </button>
-          <button
-            className="btn ghost"
-            onClick={() => {
-              setIsCreating(true);
-              setSelectedId(null);
-              setForm(EMPTY_FORM);
-              setRenderOutput("");
-              setStatus("已切换到新建模式");
-            }}
-            disabled={busy}
-          >
+          <button className="btn ghost" onClick={() => setImportModalOpen(true)} disabled={busy}>
+            导入
+          </button>
+          <button className="btn ghost" onClick={() => setExportModalOpen(true)} disabled={busy}>
+            导出
+          </button>
+          <button className="btn ghost" onClick={createNew} disabled={busy}>
             新建
           </button>
         </div>
@@ -413,8 +539,92 @@ export default function App() {
 
       <footer className="footer card">
         <span>{status}</span>
-        <span>Cmd/Ctrl + S 保存 · Cmd/Ctrl + F 搜索 · Cmd/Ctrl + N 新建</span>
+        <span>Cmd+N 新建 · Cmd+S 保存 · Cmd+F 搜索</span>
       </footer>
+
+      {toast ? <div className="toast">{toast}</div> : null}
+
+      <Modal
+        open={importModalOpen}
+        title="导入 JSON"
+        onClose={() => setImportModalOpen(false)}
+        footer={
+          <>
+            <button className="btn ghost" onClick={() => setImportModalOpen(false)}>
+              取消
+            </button>
+            <button className="btn primary" onClick={() => void onConfirmImport()} disabled={busy}>
+              开始导入
+            </button>
+          </>
+        }
+      >
+        <label className="field">
+          <span>文件路径</span>
+          <div className="toolbar-row">
+            <input
+              className="input"
+              value={importPath}
+              onChange={(e) => setImportPath(e.target.value)}
+              placeholder="/path/to/prompts.json"
+            />
+            <button className="btn ghost" onClick={() => void onPickImportFile()}>
+              选择
+            </button>
+          </div>
+        </label>
+      </Modal>
+
+      <Modal
+        open={exportModalOpen}
+        title="导出提示词"
+        onClose={() => setExportModalOpen(false)}
+        footer={
+          <>
+            <button className="btn ghost" onClick={() => setExportModalOpen(false)}>
+              取消
+            </button>
+            <button className="btn primary" onClick={() => void onConfirmExport()} disabled={busy}>
+              开始导出
+            </button>
+          </>
+        }
+      >
+        <label className="field">
+          <span>导出格式</span>
+          <select
+            className="input"
+            value={exportFormat}
+            onChange={(e) => {
+              const format = e.target.value as "json" | "markdown";
+              setExportFormat(format);
+              setExportPath(format === "json" ? "prompt_vault_export.json" : "prompt_vault_export.md");
+            }}
+          >
+            <option value="json">json</option>
+            <option value="markdown">markdown</option>
+          </select>
+        </label>
+
+        <label className="field">
+          <span>导出路径</span>
+          <div className="toolbar-row">
+            <input className="input" value={exportPath} onChange={(e) => setExportPath(e.target.value)} />
+            <button className="btn ghost" onClick={() => void onPickExportPath()}>
+              选择
+            </button>
+          </div>
+        </label>
+
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={exportIncludeDeleted}
+            onChange={(e) => setExportIncludeDeleted(e.target.checked)}
+          />
+          包含已删除记录
+        </label>
+      </Modal>
     </div>
   );
 }
