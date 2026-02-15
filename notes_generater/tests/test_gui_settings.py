@@ -13,17 +13,16 @@ class GuiSettingsTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             settings_path = Path(tmp) / "missing.json"
             settings = load_gui_settings(settings_path)
-            self.assertEqual(settings.workspace_root, "")
+            self.assertEqual(settings.course_root, "")
             self.assertEqual(settings.from_round, "round0")
 
     def test_save_and_load_roundtrip(self) -> None:
         with TemporaryDirectory() as tmp:
             settings_path = Path(tmp) / "settings.json"
             original = GuiSettings(
-                workspace_root="/tmp/ws",
+                course_root="/tmp/ws",
                 course_id="cs61a",
                 target_lecture="lecture01",
-                target_lecture_dir="/tmp/ws/course/LEC01",
                 from_round="round1",
                 to_round="round3",
                 max_changed_lines=300,

@@ -12,9 +12,10 @@ from .cache_service import CacheService
 from .codex_executor import CodexExecutor
 from .feedback_service import FeedbackService
 from .gui_settings import load_gui_settings, save_gui_settings
+from .lecture_registry_service import LectureRegistryService
 from .models import CreateProjectRequest, ProjectConfig
 from .prompt_template_service import DEFAULT_PROMPT_TEMPLATES, PROMPT_TEMPLATE_KEYS, PromptTemplateService
-from .project_service import ProjectService, slugify_course_id
+from .project_service import PROJECT_REL_PATH, ProjectService, slugify_course_id
 from .round0_initializer import Round0Initializer
 from .run_history_service import RunHistoryService
 from .workflow_orchestrator import WorkflowOrchestrator
@@ -51,6 +52,7 @@ def main() -> int:
             QHBoxLayout,
             QLabel,
             QLineEdit,
+            QListWidget,
             QMainWindow,
             QMessageBox,
             QPushButton,
@@ -101,6 +103,7 @@ def main() -> int:
             self.cache_service = CacheService()
             self.feedback_service = FeedbackService()
             self.run_history_service = RunHistoryService()
+            self.lecture_registry_service = LectureRegistryService()
             self.prompt_template_service = PromptTemplateService()
             self.codex_executor = CodexExecutor(exec_timeout_seconds=10 * 60)
             self.workflow_orchestrator = WorkflowOrchestrator(
@@ -116,6 +119,7 @@ def main() -> int:
             self.settings = load_gui_settings()
             self.nav_buttons: list[QPushButton] = []
             self.prompt_editors: dict[str, QPlainTextEdit] = {}
+            self.lecture_entries: dict[str, list[str]] = {}
 
             self._build_ui()
             self._apply_theme()
@@ -142,10 +146,11 @@ def main() -> int:
             sidebar_layout.addWidget(subtitle)
 
             self._add_nav_button(sidebar_layout, "项目", 0)
-            self._add_nav_button(sidebar_layout, "流程", 1)
-            self._add_nav_button(sidebar_layout, "审阅", 2)
-            self._add_nav_button(sidebar_layout, "提示词", 3)
-            self._add_nav_button(sidebar_layout, "运行记录", 4)
+            self._add_nav_button(sidebar_layout, "讲次", 1)
+            self._add_nav_button(sidebar_layout, "流程", 2)
+            self._add_nav_button(sidebar_layout, "审阅", 3)
+            self._add_nav_button(sidebar_layout, "提示词", 4)
+            self._add_nav_button(sidebar_layout, "运行记录", 5)
             sidebar_layout.addStretch(1)
             sidebar_layout.addWidget(QLabel("macOS 本地模式", objectName="SidebarFootnote"))
 
@@ -170,6 +175,7 @@ def main() -> int:
 
             self.page_stack = QStackedWidget(objectName="PageStack")
             self.page_stack.addWidget(self._build_project_page())
+            self.page_stack.addWidget(self._build_lecture_page())
             self.page_stack.addWidget(self._build_workflow_page())
             self.page_stack.addWidget(self._build_review_page())
             self.page_stack.addWidget(self._build_prompt_page())
@@ -201,7 +207,7 @@ def main() -> int:
             layout.setSpacing(12)
 
             heading = QLabel("项目设置", objectName="PageHeading")
-            hint = QLabel("选择工作区与课程后，创建或加载项目目录。", objectName="PageHint")
+            hint = QLabel("选择课程根目录后，创建或加载单课程项目。", objectName="PageHint")
             layout.addWidget(heading)
             layout.addWidget(hint)
 
@@ -209,28 +215,73 @@ def main() -> int:
             grid.setHorizontalSpacing(10)
             grid.setVerticalSpacing(10)
 
-            self.workspace_edit = QLineEdit()
+            self.course_root_edit = QLineEdit()
             self.course_edit = QLineEdit()
             self.project_root_edit = QLineEdit()
             self.project_root_edit.setReadOnly(True)
             self.notes_root_edit = QLineEdit()
             self.notes_root_edit.setReadOnly(True)
 
-            browse_btn = QPushButton("选择工作区")
-            browse_btn.clicked.connect(self._on_browse_workspace)
+            browse_btn = QPushButton("选择课程目录")
+            browse_btn.clicked.connect(self._on_browse_course_root)
             create_btn = QPushButton("创建或加载项目")
             create_btn.clicked.connect(self._on_create_or_load_project)
 
-            grid.addWidget(QLabel("工作区目录"), 0, 0)
-            grid.addWidget(self.workspace_edit, 0, 1)
+            grid.addWidget(QLabel("课程根目录"), 0, 0)
+            grid.addWidget(self.course_root_edit, 0, 1)
             grid.addWidget(browse_btn, 0, 2)
-            grid.addWidget(QLabel("课程标识"), 1, 0)
+            grid.addWidget(QLabel("课程标识（可选）"), 1, 0)
             grid.addWidget(self.course_edit, 1, 1)
             grid.addWidget(create_btn, 1, 2)
             grid.addWidget(QLabel("项目目录"), 2, 0)
             grid.addWidget(self.project_root_edit, 2, 1, 1, 2)
             grid.addWidget(QLabel("笔记目录"), 3, 0)
             grid.addWidget(self.notes_root_edit, 3, 1, 1, 2)
+            layout.addLayout(grid)
+            layout.addStretch(1)
+            return page
+
+        def _build_lecture_page(self) -> QWidget:
+            page = QFrame(objectName="PageCard")
+            layout = QVBoxLayout(page)
+            layout.setContentsMargins(16, 16, 16, 16)
+            layout.setSpacing(12)
+
+            heading = QLabel("讲次配置", objectName="PageHeading")
+            hint = QLabel("维护 lec_id 到课程资料路径的映射。一个 lec_id 可绑定多个目录或文件。", objectName="PageHint")
+            layout.addWidget(heading)
+            layout.addWidget(hint)
+
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(10)
+
+            self.lecture_list = QListWidget()
+            self.lecture_list.currentTextChanged.connect(self._on_select_lecture_item)
+            self.lecture_id_edit = QLineEdit()
+            self.lecture_paths_input = QPlainTextEdit()
+            self.lecture_paths_input.setPlaceholderText("每行一个资料路径（目录或文件）")
+
+            browse_path_btn = QPushButton("添加路径")
+            browse_path_btn.clicked.connect(self._on_add_lecture_path)
+            save_lecture_btn = QPushButton("保存讲次映射")
+            save_lecture_btn.clicked.connect(self._on_save_lecture_mapping)
+            remove_lecture_btn = QPushButton("删除讲次")
+            remove_lecture_btn.clicked.connect(self._on_remove_lecture_mapping)
+            refresh_lecture_btn = QPushButton("刷新列表")
+            refresh_lecture_btn.clicked.connect(self._refresh_lecture_mappings)
+
+            grid.addWidget(QLabel("讲次列表"), 0, 0)
+            grid.addWidget(QLabel("讲次标识"), 0, 1)
+            grid.addWidget(self.lecture_list, 1, 0, 5, 1)
+            grid.addWidget(self.lecture_id_edit, 1, 1, 1, 2)
+            grid.addWidget(QLabel("资料路径"), 2, 1)
+            grid.addWidget(self.lecture_paths_input, 3, 1, 2, 2)
+            grid.addWidget(browse_path_btn, 5, 1)
+            grid.addWidget(save_lecture_btn, 5, 2)
+            grid.addWidget(remove_lecture_btn, 6, 1)
+            grid.addWidget(refresh_lecture_btn, 6, 2)
+
             layout.addLayout(grid)
             layout.addStretch(1)
             return page
@@ -242,7 +293,7 @@ def main() -> int:
             layout.setSpacing(12)
 
             heading = QLabel("流程控制", objectName="PageHeading")
-            hint = QLabel("执行轮次、从暂停点恢复，并设置目标讲次与目录。", objectName="PageHint")
+            hint = QLabel("执行轮次、从暂停点恢复，并按 lec_id 指定目标讲次。", objectName="PageHint")
             layout.addWidget(heading)
             layout.addWidget(hint)
 
@@ -254,14 +305,12 @@ def main() -> int:
             self.from_round_combo.addItems(ROUND_VALUES)
             self.to_round_combo = QComboBox()
             self.to_round_combo.addItems(ROUND_VALUES)
-            self.target_lecture_edit = QLineEdit()
-            self.target_lecture_dir_edit = QLineEdit()
+            self.target_lecture_combo = QComboBox()
+            self.target_lecture_combo.setEditable(True)
             self.max_lines_edit = QLineEdit()
             self.max_files_edit = QLineEdit()
             self.pause_each_round_check = QCheckBox("每轮后暂停")
             self.search_check = QCheckBox("启用网页搜索")
-            browse_target_dir_btn = QPushButton("选择讲次目录")
-            browse_target_dir_btn.clicked.connect(self._on_browse_target_lecture_dir)
 
             init_round0_btn = QPushButton("初始化第 0 轮")
             init_round0_btn.clicked.connect(self._on_init_round0)
@@ -277,20 +326,17 @@ def main() -> int:
             grid.addWidget(QLabel("结束轮次"), 0, 2)
             grid.addWidget(self.to_round_combo, 0, 3)
             grid.addWidget(QLabel("目标讲次"), 1, 0)
-            grid.addWidget(self.target_lecture_edit, 1, 1, 1, 3)
-            grid.addWidget(QLabel("讲次目录"), 2, 0)
-            grid.addWidget(self.target_lecture_dir_edit, 2, 1, 1, 2)
-            grid.addWidget(browse_target_dir_btn, 2, 3)
-            grid.addWidget(QLabel("最大改动行数"), 3, 0)
-            grid.addWidget(self.max_lines_edit, 3, 1)
-            grid.addWidget(QLabel("最大改动文件数"), 3, 2)
-            grid.addWidget(self.max_files_edit, 3, 3)
-            grid.addWidget(self.pause_each_round_check, 4, 0, 1, 2)
-            grid.addWidget(self.search_check, 4, 2, 1, 2)
-            grid.addWidget(init_round0_btn, 5, 0)
-            grid.addWidget(run_workflow_btn, 5, 1)
-            grid.addWidget(run_check_btn, 5, 2)
-            grid.addWidget(resume_workflow_btn, 5, 3)
+            grid.addWidget(self.target_lecture_combo, 1, 1, 1, 3)
+            grid.addWidget(QLabel("最大改动行数"), 2, 0)
+            grid.addWidget(self.max_lines_edit, 2, 1)
+            grid.addWidget(QLabel("最大改动文件数"), 2, 2)
+            grid.addWidget(self.max_files_edit, 2, 3)
+            grid.addWidget(self.pause_each_round_check, 3, 0, 1, 2)
+            grid.addWidget(self.search_check, 3, 2, 1, 2)
+            grid.addWidget(init_round0_btn, 4, 0)
+            grid.addWidget(run_workflow_btn, 4, 1)
+            grid.addWidget(run_check_btn, 4, 2)
+            grid.addWidget(resume_workflow_btn, 4, 3)
             layout.addLayout(grid)
             layout.addStretch(1)
             return page
@@ -540,10 +586,13 @@ def main() -> int:
             )
 
         def _apply_settings(self) -> None:
-            self.workspace_edit.setText(self.settings.workspace_root)
+            self.course_root_edit.setText(self.settings.course_root)
             self.course_edit.setText(self.settings.course_id)
-            self.target_lecture_edit.setText(self.settings.target_lecture)
-            self.target_lecture_dir_edit.setText(self.settings.target_lecture_dir)
+            self.target_lecture_combo.clear()
+            self.target_lecture_combo.addItem("")
+            if self.settings.target_lecture:
+                self.target_lecture_combo.addItem(self.settings.target_lecture)
+            self.target_lecture_combo.setCurrentText(self.settings.target_lecture)
             self._set_combo_value(self.from_round_combo, self.settings.from_round)
             self._set_combo_value(self.to_round_combo, self.settings.to_round)
             self.max_lines_edit.setText(str(self.settings.max_changed_lines))
@@ -554,10 +603,9 @@ def main() -> int:
         def _save_settings(self) -> None:
             self.settings = replace(
                 self.settings,
-                workspace_root=self.workspace_edit.text().strip(),
+                course_root=self.course_root_edit.text().strip(),
                 course_id=self.course_edit.text().strip(),
-                target_lecture=self.target_lecture_edit.text().strip(),
-                target_lecture_dir=self.target_lecture_dir_edit.text().strip(),
+                target_lecture=self.target_lecture_combo.currentText().strip(),
                 from_round=self.from_round_combo.currentText(),
                 to_round=self.to_round_combo.currentText(),
                 max_changed_lines=_safe_int(self.max_lines_edit.text().strip(), 500),
@@ -584,36 +632,30 @@ def main() -> int:
             self.status_label.setText(text)
             self.status_badge.setText("运行中" if running else "空闲")
 
-        def _on_browse_workspace(self) -> None:
-            selected = QFileDialog.getExistingDirectory(self, "选择工作区目录")
+        def _on_browse_course_root(self) -> None:
+            selected = QFileDialog.getExistingDirectory(self, "选择课程根目录")
             if selected:
-                self.workspace_edit.setText(selected)
-                self._save_settings()
-
-        def _on_browse_target_lecture_dir(self) -> None:
-            current = self.target_lecture_dir_edit.text().strip()
-            start = current or self.workspace_edit.text().strip()
-            selected = QFileDialog.getExistingDirectory(self, "选择目标讲次目录", start)
-            if selected:
-                self.target_lecture_dir_edit.setText(selected)
+                self.course_root_edit.setText(selected)
+                if not self.course_edit.text().strip():
+                    self.course_edit.setText(Path(selected).name)
                 self._save_settings()
 
         def _on_create_or_load_project(self) -> None:
-            workspace_text = self.workspace_edit.text().strip()
+            course_root_text = self.course_root_edit.text().strip()
             course_text = self.course_edit.text().strip()
-            if not workspace_text or not course_text:
-                self._error("工作区目录和课程标识不能为空")
+            if not course_root_text:
+                self._error("课程根目录不能为空")
                 return
 
             try:
-                workspace_root = Path(workspace_text).expanduser().resolve()
-                course_id = slugify_course_id(course_text)
-                project_root = workspace_root / "projects" / course_id
+                course_root = Path(course_root_text).expanduser().resolve()
+                course_id = slugify_course_id(course_text) if course_text else None
+                project_root = course_root / PROJECT_REL_PATH
                 if (project_root / "project.yaml").exists():
                     config = self.project_service.load_project_config(project_root)
                 else:
                     config = self.project_service.create_project(
-                        CreateProjectRequest(course_id=course_id, workspace_root=workspace_root),
+                        CreateProjectRequest(course_root=course_root, course_id=course_id),
                         allow_existing=True,
                     )
             except (ValueError, FileNotFoundError, OSError) as exc:
@@ -621,10 +663,13 @@ def main() -> int:
                 return
 
             self.current_config = config
+            self.course_root_edit.setText(str(config.course_root))
+            self.course_edit.setText(config.course_id)
             self.project_root_edit.setText(str(config.project_root))
             self.notes_root_edit.setText(str(config.notes_root))
             self._update_header()
             self._load_prompt_templates_for_current_project()
+            self._refresh_lecture_mappings()
             self._save_settings()
             self._log(f"项目已就绪: {config.project_root}")
 
@@ -641,6 +686,7 @@ def main() -> int:
                     return None
                 self._update_header()
                 self._load_prompt_templates_for_current_project()
+                self._refresh_lecture_mappings()
                 return self.current_config
             self._error("请先创建或加载项目")
             return None
@@ -651,6 +697,100 @@ def main() -> int:
                 return
             templates = self.prompt_template_service.load_templates(project_root=self.current_config.project_root)
             self._fill_prompt_editors(templates)
+
+        def _refresh_lecture_mappings(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+            entries = self.lecture_registry_service.list_lectures(project_root=config.project_root)
+            self.lecture_entries = {
+                entry.lec_id: [str(path) for path in entry.paths]
+                for entry in entries
+            }
+
+            self.lecture_list.clear()
+            for lec_id in sorted(self.lecture_entries.keys()):
+                self.lecture_list.addItem(f"{lec_id} ({len(self.lecture_entries[lec_id])} 路径)")
+
+            current_target = self.target_lecture_combo.currentText().strip()
+            self.target_lecture_combo.blockSignals(True)
+            self.target_lecture_combo.clear()
+            self.target_lecture_combo.addItem("")
+            for lec_id in sorted(self.lecture_entries.keys()):
+                self.target_lecture_combo.addItem(lec_id)
+            if current_target:
+                self.target_lecture_combo.setCurrentText(current_target)
+            self.target_lecture_combo.blockSignals(False)
+
+        def _on_select_lecture_item(self, text: str) -> None:
+            if not text:
+                return
+            lec_id = text.split(" (", 1)[0]
+            paths = self.lecture_entries.get(lec_id, [])
+            self.lecture_id_edit.setText(lec_id)
+            self.lecture_paths_input.setPlainText("\n".join(paths))
+
+        def _on_add_lecture_path(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+            start = self.course_root_edit.text().strip() or str(config.course_root)
+            selected = QFileDialog.getExistingDirectory(self, "选择讲次资料目录", start)
+            if not selected:
+                return
+            current_lines = [
+                line.strip()
+                for line in self.lecture_paths_input.toPlainText().splitlines()
+                if line.strip()
+            ]
+            if selected not in current_lines:
+                current_lines.append(selected)
+            self.lecture_paths_input.setPlainText("\n".join(current_lines))
+
+        def _on_save_lecture_mapping(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+            lec_id = self.lecture_id_edit.text().strip()
+            paths = [
+                line.strip()
+                for line in self.lecture_paths_input.toPlainText().splitlines()
+                if line.strip()
+            ]
+            try:
+                entry = self.lecture_registry_service.upsert_lecture(
+                    project_root=config.project_root,
+                    lec_id=lec_id,
+                    paths=[Path(item) for item in paths],
+                )
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                self._error(str(exc))
+                return
+            self._refresh_lecture_mappings()
+            self.target_lecture_combo.setCurrentText(entry.lec_id)
+            self._save_settings()
+            self._log(f"讲次映射已保存: {entry.lec_id}")
+
+        def _on_remove_lecture_mapping(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+            lec_id = self.lecture_id_edit.text().strip()
+            if not lec_id:
+                self._error("请先选择要删除的 lec_id")
+                return
+            removed = self.lecture_registry_service.remove_lecture(
+                project_root=config.project_root,
+                lec_id=lec_id,
+            )
+            if not removed:
+                self._error("未找到对应 lec_id")
+                return
+            self.lecture_id_edit.clear()
+            self.lecture_paths_input.clear()
+            self._refresh_lecture_mappings()
+            self._save_settings()
+            self._log(f"讲次映射已删除: {lec_id}")
 
         def _on_init_round0(self) -> None:
             config = self._require_config()
@@ -680,8 +820,7 @@ def main() -> int:
                 return
             from_round = self.from_round_combo.currentText()
             to_round = self.to_round_combo.currentText()
-            target = self.target_lecture_edit.text().strip()
-            target_dir = self.target_lecture_dir_edit.text().strip()
+            target = self.target_lecture_combo.currentText().strip()
             max_lines = _safe_int(self.max_lines_edit.text().strip(), config.max_changed_lines)
             max_files = _safe_int(self.max_files_edit.text().strip(), config.max_changed_files)
             search_enabled = self.search_check.isChecked()
@@ -694,7 +833,6 @@ def main() -> int:
                     from_round=from_round,  # type: ignore[arg-type]
                     to_round=to_round,  # type: ignore[arg-type]
                     target_lectures=[target] if target else [],
-                    target_lecture_dir=target_dir or None,
                     search_enabled=search_enabled,
                     max_retries=0,
                     pause_after_each_round=pause_each_round,
@@ -717,8 +855,7 @@ def main() -> int:
             if not config:
                 return
             to_round = self.to_round_combo.currentText()
-            target = self.target_lecture_edit.text().strip()
-            target_dir = self.target_lecture_dir_edit.text().strip()
+            target = self.target_lecture_combo.currentText().strip()
             max_lines = _safe_int(self.max_lines_edit.text().strip(), config.max_changed_lines)
             max_files = _safe_int(self.max_files_edit.text().strip(), config.max_changed_files)
             search_enabled = self.search_check.isChecked()
@@ -730,7 +867,6 @@ def main() -> int:
                     notes_root=config.notes_root,
                     to_round=to_round,  # type: ignore[arg-type]
                     target_lectures=[target] if target else [],
-                    target_lecture_dir=target_dir or None,
                     search_enabled=search_enabled,
                     max_retries=0,
                     pause_after_each_round=pause_each_round,
