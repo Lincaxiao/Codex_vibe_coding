@@ -1,6 +1,8 @@
 import path from "node:path";
 import { app, BrowserWindow } from "electron";
 
+import { closeDb, getDb } from "./db";
+
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1240,
@@ -27,7 +29,9 @@ function createMainWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  getDb();
   createMainWindow();
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
@@ -36,7 +40,12 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
+  closeDb();
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  closeDb();
 });
