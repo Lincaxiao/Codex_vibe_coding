@@ -1,10 +1,8 @@
-import type { HealthPayload } from "../shared/types";
+import type { VaultApi } from "../shared/types";
 
 declare global {
   interface Window {
-    vault: {
-      health: () => Promise<HealthPayload>;
-    };
+    vault: VaultApi;
   }
 }
 

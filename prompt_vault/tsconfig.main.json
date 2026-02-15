@@ -2,9 +2,9 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "module": "CommonJS",
-    "outDir": "build/main",
-    "rootDir": "src/main",
+    "outDir": "build",
+    "rootDir": "src",
     "types": ["node", "electron"]
   },
-  "include": ["src/main/**/*.ts"]
+  "include": ["src/main/**/*.ts", "src/shared/**/*.ts"]
 }
