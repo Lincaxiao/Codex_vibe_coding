@@ -1,10 +1,8 @@
-data/
-__pycache__/
-*.pyc
-.venv/
-demo_tmp_*/
-.tmp_test/
-frontend/node_modules/
-frontend/dist/
+node_modules/
 build/
 dist/
+release/
+.DS_Store
+*.log
+playwright-report/
+coverage/

@@ -1,0 +1,40 @@
+{
+  "name": "prompt-vault-desktop",
+  "version": "0.1.0",
+  "description": "Prompt Vault macOS desktop app (Electron + TypeScript)",
+  "main": "build/main/index.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "clean": "rm -rf build dist release",
+    "dev:renderer": "vite",
+    "dev:main": "tsc -p tsconfig.main.json --watch",
+    "dev:preload": "tsc -p tsconfig.preload.json --watch",
+    "dev:electron": "wait-on tcp:5173 build/main/index.js build/preload/index.js && cross-env PROMPT_VAULT_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "dev": "concurrently -k -n renderer,main,preload,electron \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:preload\" \"npm:dev:electron\"",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:preload": "tsc -p tsconfig.preload.json",
+    "build:renderer": "vite build",
+    "build": "npm run clean && npm run build:main && npm run build:preload && npm run build:renderer",
+    "start": "electron .",
+    "dist:mac": "npm run build && electron-builder --mac --arm64",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.renderer.json --noEmit"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^34.0.2",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "wait-on": "^8.0.2"
+  }
+}

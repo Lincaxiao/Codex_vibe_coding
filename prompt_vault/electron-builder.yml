@@ -1,0 +1,15 @@
+appId: com.promptvault.desktop
+productName: Prompt Vault
+asar: true
+files:
+  - build/**/*
+  - dist/**/*
+  - package.json
+directories:
+  output: release
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.productivity
+  artifactName: PromptVault-${version}-${arch}.${ext}
