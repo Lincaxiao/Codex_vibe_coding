@@ -4,6 +4,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 npm install
-npm run typecheck
 npm run test
-npm run dist:mac

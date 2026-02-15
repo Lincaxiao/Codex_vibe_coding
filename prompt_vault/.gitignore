@@ -2,7 +2,8 @@ node_modules/
 build/
 dist/
 release/
+coverage/
+playwright-report/
+.tmp/
 .DS_Store
 *.log
-playwright-report/
-coverage/

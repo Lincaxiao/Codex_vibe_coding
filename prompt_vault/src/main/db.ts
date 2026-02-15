@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 import Database from "better-sqlite3";
-import { app } from "electron";
 
 import { applySchema } from "./schema";
 
@@ -13,7 +12,19 @@ function resolveDbPath(): string {
   if (configuredPath) {
     return path.resolve(configuredPath);
   }
-  return path.join(app.getPath("userData"), "prompt_vault.sqlite");
+
+  try {
+    // Use runtime require to keep integration tests executable in a plain Node process.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const electron = require("electron") as { app?: { getPath: (name: string) => string } };
+    if (electron.app?.getPath) {
+      return path.join(electron.app.getPath("userData"), "prompt_vault.sqlite");
+    }
+  } catch {
+    // ignored on non-electron process
+  }
+
+  throw new Error("未找到数据库路径，请设置 PROMPT_VAULT_DB_PATH");
 }
 
 export function getDb(): Database.Database {
