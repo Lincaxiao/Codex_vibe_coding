@@ -1,7 +1,7 @@
 import path from "node:path";
 import { app, BrowserWindow } from "electron";
 
-import { closeDb, getDb } from "./db";
+import { closeDb } from "./db";
 import { registerIpcHandlers } from "./ipc";
 import { installAppMenu } from "./menu";
 
@@ -32,7 +32,6 @@ function createMainWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
-  getDb();
   registerIpcHandlers();
   installAppMenu();
   createMainWindow();

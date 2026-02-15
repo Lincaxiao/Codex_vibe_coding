@@ -2,6 +2,7 @@ import { clipboard, dialog, ipcMain } from "electron";
 
 import type { Result } from "../shared/types";
 import { AppException } from "./appError";
+import { setStorageFolder, getStorageConfig } from "./db";
 import { fail, ok, toAppError } from "./errors";
 import { getHealthPayload } from "./health";
 import { exportToJson, exportToMarkdown, importFromJson } from "./importExportService";
@@ -54,8 +55,22 @@ async function pickExportPath(format: "json" | "markdown"): Promise<string> {
   return result.filePath;
 }
 
+async function pickStorageFolder(): Promise<string> {
+  const result = await dialog.showOpenDialog({
+    properties: ["openDirectory", "createDirectory"],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    throw new AppException("VALIDATION_ERROR", "已取消操作");
+  }
+
+  return result.filePaths[0];
+}
+
 export function registerIpcHandlers(): void {
   ipcMain.removeHandler("vault:health");
+  ipcMain.removeHandler("vault:storage:getConfig");
+  ipcMain.removeHandler("vault:storage:chooseFolder");
   ipcMain.removeHandler("vault:prompt:list");
   ipcMain.removeHandler("vault:prompt:get");
   ipcMain.removeHandler("vault:prompt:create");
@@ -68,6 +83,15 @@ export function registerIpcHandlers(): void {
   ipcMain.removeHandler("vault:prompt:exportMarkdown");
 
   ipcMain.handle("vault:health", () => safeRun(() => getHealthPayload()));
+
+  ipcMain.handle("vault:storage:getConfig", () => safeRun(() => getStorageConfig()));
+
+  ipcMain.handle("vault:storage:chooseFolder", () =>
+    safeRun(async () => {
+      const folderPath = await pickStorageFolder();
+      return setStorageFolder(folderPath);
+    })
+  );
 
   ipcMain.handle("vault:prompt:list", (_event, input: unknown) =>
     safeRun(() => {

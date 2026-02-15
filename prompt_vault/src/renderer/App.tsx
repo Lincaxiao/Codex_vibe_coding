@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { MenuCommand, Prompt } from "../shared/types";
+import type { MenuCommand, Prompt, StorageConfig } from "../shared/types";
 import { formatDate, parseTags, parseVariables } from "./utils";
 
 type FormState = {
@@ -43,6 +43,15 @@ function Modal(props: {
   );
 }
 
+function initialStorageConfig(): StorageConfig {
+  return {
+    isConfigured: false,
+    selectedFolder: null,
+    dbPath: null,
+    source: "unset",
+  };
+}
+
 export default function App() {
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -61,6 +70,10 @@ export default function App() {
   const [renderOutput, setRenderOutput] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const [storageConfig, setStorageConfig] = useState<StorageConfig>(initialStorageConfig());
+  const [storageLoading, setStorageLoading] = useState(true);
+  const [storageModalOpen, setStorageModalOpen] = useState(false);
+
   const [importModalOpen, setImportModalOpen] = useState(false);
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
@@ -72,13 +85,54 @@ export default function App() {
     [items, selectedId]
   );
 
+  const storageRequired = !storageLoading && !storageConfig.isConfigured;
+
   const notify = useCallback((message: string) => {
     setStatus(message);
     setToast(message);
     window.setTimeout(() => setToast(""), 2200);
   }, []);
 
+  const requireStorage = useCallback(() => {
+    if (storageConfig.isConfigured) {
+      return true;
+    }
+    setStorageModalOpen(true);
+    notify("请先设置数据存储文件夹");
+    return false;
+  }, [notify, storageConfig.isConfigured]);
+
+  const refreshStorageConfig = useCallback(async () => {
+    setStorageLoading(true);
+    const result = await window.vault.storage.getConfig();
+    setStorageLoading(false);
+
+    if (!result.ok) {
+      notify(result.error.message);
+      setStorageConfig(initialStorageConfig());
+      setStorageModalOpen(true);
+      return false;
+    }
+
+    setStorageConfig(result.data);
+    if (!result.data.isConfigured) {
+      setStorageModalOpen(true);
+      setItems([]);
+      setTotal(0);
+      setSelectedId(null);
+      setForm(EMPTY_FORM);
+      setStatus("请先选择数据存储文件夹");
+      return false;
+    }
+
+    return true;
+  }, [notify]);
+
   const loadList = useCallback(async () => {
+    if (!storageConfig.isConfigured) {
+      return;
+    }
+
     setBusy(true);
     const result = await window.vault.prompt.list({
       query,
@@ -112,10 +166,14 @@ export default function App() {
     if (!exists) {
       setSelectedId(result.data.items[0].id);
     }
-  }, [includeDeleted, isCreating, notify, query, selectedId]);
+  }, [includeDeleted, isCreating, notify, query, selectedId, storageConfig.isConfigured]);
 
   const loadDetail = useCallback(
     async (promptId: string) => {
+      if (!storageConfig.isConfigured) {
+        return;
+      }
+
       setBusy(true);
       const result = await window.vault.prompt.get(promptId);
       setBusy(false);
@@ -132,7 +190,7 @@ export default function App() {
       });
       setStatus(`已加载 ${result.data.id}`);
     },
-    [notify]
+    [notify, storageConfig.isConfigured]
   );
 
   const createNew = useCallback(() => {
@@ -143,7 +201,27 @@ export default function App() {
     setStatus("已切换到新建模式");
   }, []);
 
+  const chooseStorageFolder = useCallback(async () => {
+    setBusy(true);
+    const result = await window.vault.storage.chooseFolder();
+    setBusy(false);
+
+    if (!result.ok) {
+      notify(result.error.message);
+      return;
+    }
+
+    setStorageConfig(result.data);
+    setStorageModalOpen(false);
+    notify(`存储位置已更新：${result.data.selectedFolder ?? "-"}`);
+    await loadList();
+  }, [loadList, notify]);
+
   const onSubmit = useCallback(async () => {
+    if (!requireStorage()) {
+      return;
+    }
+
     const payload = {
       title: form.title.trim(),
       body: form.body,
@@ -183,9 +261,13 @@ export default function App() {
 
     notify(`已保存 ${result.data.id}`);
     await loadList();
-  }, [form.body, form.tags, form.title, isCreating, loadList, notify, selectedId]);
+  }, [form.body, form.tags, form.title, isCreating, loadList, notify, requireStorage, selectedId]);
 
   const onDelete = useCallback(async () => {
+    if (!requireStorage()) {
+      return;
+    }
+
     if (!selectedId || isCreating) {
       notify("请先选择一条记录");
       return;
@@ -202,9 +284,13 @@ export default function App() {
     setSelectedId(null);
     setRenderOutput("");
     await loadList();
-  }, [isCreating, loadList, notify, selectedId]);
+  }, [isCreating, loadList, notify, requireStorage, selectedId]);
 
   const onRender = useCallback(async () => {
+    if (!requireStorage()) {
+      return;
+    }
+
     if (!selectedId || isCreating) {
       notify("请先选择一条记录");
       return;
@@ -232,9 +318,13 @@ export default function App() {
 
     setRenderOutput(result.data.content);
     notify("渲染完成");
-  }, [isCreating, notify, renderVars, selectedId]);
+  }, [isCreating, notify, renderVars, requireStorage, selectedId]);
 
   const onCopy = useCallback(async () => {
+    if (!requireStorage()) {
+      return;
+    }
+
     if (!selectedId || isCreating) {
       notify("请先选择一条记录");
       return;
@@ -262,9 +352,13 @@ export default function App() {
 
     setRenderOutput(result.data.content);
     notify("已复制渲染结果");
-  }, [isCreating, notify, renderVars, selectedId]);
+  }, [isCreating, notify, renderVars, requireStorage, selectedId]);
 
   const onConfirmImport = useCallback(async () => {
+    if (!requireStorage()) {
+      return;
+    }
+
     setBusy(true);
     const result = await window.vault.prompt.importJson();
     setBusy(false);
@@ -278,9 +372,13 @@ export default function App() {
       `导入完成：新增 ${result.data.added}，跳过 ${result.data.skipped}（${result.data.sourcePath}）`
     );
     await loadList();
-  }, [loadList, notify]);
+  }, [loadList, notify, requireStorage]);
 
   const onConfirmExport = useCallback(async () => {
+    if (!requireStorage()) {
+      return;
+    }
+
     setBusy(true);
     const result =
       exportFormat === "json"
@@ -297,18 +395,24 @@ export default function App() {
 
     setExportModalOpen(false);
     notify(`导出完成：${result.data.outputPath}`);
-  }, [exportFormat, exportIncludeDeleted, notify]);
+  }, [exportFormat, exportIncludeDeleted, notify, requireStorage]);
 
   useEffect(() => {
-    void loadList();
-  }, [loadList]);
+    const run = async () => {
+      const ready = await refreshStorageConfig();
+      if (ready) {
+        await loadList();
+      }
+    };
+    void run();
+  }, [loadList, refreshStorageConfig]);
 
   useEffect(() => {
-    if (!selectedId || isCreating) {
+    if (!selectedId || isCreating || !storageConfig.isConfigured) {
       return;
     }
     void loadDetail(selectedId);
-  }, [isCreating, loadDetail, selectedId]);
+  }, [isCreating, loadDetail, selectedId, storageConfig.isConfigured]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -355,16 +459,19 @@ export default function App() {
           <p>macOS local prompt workbench</p>
         </div>
         <div className="header-actions">
-          <button className="btn ghost" onClick={() => void loadList()} disabled={busy}>
+          <button className="btn ghost" onClick={() => setStorageModalOpen(true)} disabled={busy || storageLoading}>
+            存储位置
+          </button>
+          <button className="btn ghost" onClick={() => void loadList()} disabled={busy || storageRequired}>
             刷新
           </button>
-          <button className="btn ghost" onClick={() => setImportModalOpen(true)} disabled={busy}>
+          <button className="btn ghost" onClick={() => setImportModalOpen(true)} disabled={busy || storageRequired}>
             导入
           </button>
-          <button className="btn ghost" onClick={() => setExportModalOpen(true)} disabled={busy}>
+          <button className="btn ghost" onClick={() => setExportModalOpen(true)} disabled={busy || storageRequired}>
             导出
           </button>
-          <button className="btn ghost" onClick={createNew} disabled={busy}>
+          <button className="btn ghost" onClick={createNew} disabled={busy || storageRequired}>
             新建
           </button>
         </div>
@@ -379,6 +486,7 @@ export default function App() {
               value={query}
               placeholder="搜索标题/正文/标签"
               onChange={(e) => setQuery(e.target.value)}
+              disabled={storageRequired}
             />
           </div>
           <label className="checkbox-row">
@@ -386,6 +494,7 @@ export default function App() {
               type="checkbox"
               checked={includeDeleted}
               onChange={(e) => setIncludeDeleted(e.target.checked)}
+              disabled={storageRequired}
             />
             包含已删除
           </label>
@@ -403,6 +512,7 @@ export default function App() {
                     setSelectedId(item.id);
                     setRenderOutput("");
                   }}
+                  disabled={storageRequired}
                 >
                   <div className="list-title-row">
                     <strong>{item.title}</strong>
@@ -431,6 +541,7 @@ export default function App() {
               className="input"
               value={form.title}
               onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))}
+              disabled={storageRequired}
             />
           </label>
 
@@ -440,6 +551,7 @@ export default function App() {
               className="input"
               value={form.tags}
               onChange={(e) => setForm((prev) => ({ ...prev, tags: e.target.value }))}
+              disabled={storageRequired}
             />
           </label>
 
@@ -449,6 +561,7 @@ export default function App() {
               className="input textarea"
               value={form.body}
               onChange={(e) => setForm((prev) => ({ ...prev, body: e.target.value }))}
+              disabled={storageRequired}
             />
           </label>
 
@@ -458,10 +571,10 @@ export default function App() {
           </div>
 
           <div className="actions">
-            <button className="btn primary" onClick={() => void onSubmit()} disabled={busy}>
+            <button className="btn primary" onClick={() => void onSubmit()} disabled={busy || storageRequired}>
               {isCreating ? "创建" : "保存"}
             </button>
-            <button className="btn danger" onClick={() => void onDelete()} disabled={busy}>
+            <button className="btn danger" onClick={() => void onDelete()} disabled={busy || storageRequired}>
               软删除
             </button>
           </div>
@@ -480,14 +593,15 @@ export default function App() {
               value={renderVars}
               onChange={(e) => setRenderVars(e.target.value)}
               placeholder="name=Alice;date=2026-02-15"
+              disabled={storageRequired}
             />
           </label>
 
           <div className="actions">
-            <button className="btn ghost" onClick={() => void onRender()} disabled={busy}>
+            <button className="btn ghost" onClick={() => void onRender()} disabled={busy || storageRequired}>
               渲染
             </button>
-            <button className="btn primary" onClick={() => void onCopy()} disabled={busy}>
+            <button className="btn primary" onClick={() => void onCopy()} disabled={busy || storageRequired}>
               复制渲染结果
             </button>
           </div>
@@ -498,6 +612,7 @@ export default function App() {
               className="input textarea"
               value={renderOutput}
               onChange={(e) => setRenderOutput(e.target.value)}
+              disabled={storageRequired}
             />
           </label>
         </section>
@@ -505,10 +620,39 @@ export default function App() {
 
       <footer className="footer card">
         <span>{status}</span>
-        <span>Cmd+N 新建 · Cmd+S 保存 · Cmd+F 搜索</span>
+        <span>
+          {storageConfig.isConfigured
+            ? `存储目录：${storageConfig.selectedFolder}`
+            : "尚未设置数据存储目录"}
+        </span>
       </footer>
 
       {toast ? <div className="toast">{toast}</div> : null}
+
+      <Modal
+        open={storageModalOpen || storageRequired}
+        title={storageRequired ? "首次使用：请选择数据存储文件夹" : "数据存储位置"}
+        onClose={storageRequired ? () => {} : () => setStorageModalOpen(false)}
+        footer={
+          <>
+            {storageRequired ? null : (
+              <button className="btn ghost" onClick={() => setStorageModalOpen(false)}>
+                取消
+              </button>
+            )}
+            <button className="btn primary" onClick={() => void chooseStorageFolder()} disabled={busy}>
+              选择文件夹
+            </button>
+          </>
+        }
+      >
+        <label className="field">
+          <span>
+            当前存储目录：{storageConfig.selectedFolder ?? "未设置"}
+          </span>
+          <span>选择后，Prompt 数据库会保存在该目录下的 `prompt_vault.sqlite`。</span>
+        </label>
+      </Modal>
 
       <Modal
         open={importModalOpen}
@@ -519,7 +663,7 @@ export default function App() {
             <button className="btn ghost" onClick={() => setImportModalOpen(false)}>
               取消
             </button>
-            <button className="btn primary" onClick={() => void onConfirmImport()} disabled={busy}>
+            <button className="btn primary" onClick={() => void onConfirmImport()} disabled={busy || storageRequired}>
               开始导入
             </button>
           </>
@@ -539,7 +683,7 @@ export default function App() {
             <button className="btn ghost" onClick={() => setExportModalOpen(false)}>
               取消
             </button>
-            <button className="btn primary" onClick={() => void onConfirmExport()} disabled={busy}>
+            <button className="btn primary" onClick={() => void onConfirmExport()} disabled={busy || storageRequired}>
               开始导出
             </button>
           </>
@@ -568,6 +712,7 @@ export default function App() {
             type="checkbox"
             checked={exportIncludeDeleted}
             onChange={(e) => setExportIncludeDeleted(e.target.checked)}
+            disabled={storageRequired}
           />
           包含已删除记录
         </label>

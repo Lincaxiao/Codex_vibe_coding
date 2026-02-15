@@ -3,28 +3,84 @@ import path from "node:path";
 
 import Database from "better-sqlite3";
 
+import { AppException } from "./appError";
 import { applySchema } from "./schema";
+import { readStorageDirectory, saveStorageDirectory } from "./storageSettings";
 
 let dbInstance: Database.Database | null = null;
 
-function resolveDbPath(): string {
+export type StorageConfig = {
+  isConfigured: boolean;
+  selectedFolder: string | null;
+  dbPath: string | null;
+  source: "env" | "user_selected" | "unset";
+};
+
+function resolveEnvDbPath(): string | null {
   const configuredPath = process.env.PROMPT_VAULT_DB_PATH?.trim();
-  if (configuredPath) {
-    return path.resolve(configuredPath);
+  if (!configuredPath) {
+    return null;
+  }
+  return path.resolve(configuredPath);
+}
+
+function resolveDbPath(): string {
+  const envDbPath = resolveEnvDbPath();
+  if (envDbPath) {
+    return envDbPath;
   }
 
-  try {
-    // Use runtime require to keep integration tests executable in a plain Node process.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const electron = require("electron") as { app?: { getPath: (name: string) => string } };
-    if (electron.app?.getPath) {
-      return path.join(electron.app.getPath("userData"), "prompt_vault.sqlite");
-    }
-  } catch {
-    // ignored on non-electron process
+  const selectedFolder = readStorageDirectory();
+  if (selectedFolder) {
+    return path.join(selectedFolder, "prompt_vault.sqlite");
   }
 
-  throw new Error("未找到数据库路径，请设置 PROMPT_VAULT_DB_PATH");
+  throw new AppException("VALIDATION_ERROR", "请先在“存储位置”里选择数据存储文件夹");
+}
+
+export function getStorageConfig(): StorageConfig {
+  const envDbPath = resolveEnvDbPath();
+  if (envDbPath) {
+    return {
+      isConfigured: true,
+      selectedFolder: path.dirname(envDbPath),
+      dbPath: envDbPath,
+      source: "env",
+    };
+  }
+
+  const selectedFolder = readStorageDirectory();
+  if (!selectedFolder) {
+    return {
+      isConfigured: false,
+      selectedFolder: null,
+      dbPath: null,
+      source: "unset",
+    };
+  }
+
+  return {
+    isConfigured: true,
+    selectedFolder,
+    dbPath: path.join(selectedFolder, "prompt_vault.sqlite"),
+    source: "user_selected",
+  };
+}
+
+export function setStorageFolder(folderPath: string): StorageConfig {
+  if (resolveEnvDbPath()) {
+    throw new AppException("VALIDATION_ERROR", "当前数据库路径由环境变量锁定，无法在界面中修改");
+  }
+
+  const selectedFolder = saveStorageDirectory(folderPath);
+  closeDb();
+
+  return {
+    isConfigured: true,
+    selectedFolder,
+    dbPath: path.join(selectedFolder, "prompt_vault.sqlite"),
+    source: "user_selected",
+  };
 }
 
 export function getDb(): Database.Database {

@@ -18,6 +18,10 @@ function invoke<T>(channel: string, payload?: unknown): Promise<Result<T>> {
 
 const vaultApi: VaultApi = {
   health: () => invoke("vault:health"),
+  storage: {
+    getConfig: () => invoke("vault:storage:getConfig"),
+    chooseFolder: () => invoke("vault:storage:chooseFolder"),
+  },
   prompt: {
     list: (input: PromptListInput) => invoke("vault:prompt:list", input),
     get: (promptId: string) => invoke("vault:prompt:get", promptId),

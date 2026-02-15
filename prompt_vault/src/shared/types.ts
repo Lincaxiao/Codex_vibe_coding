@@ -20,7 +20,16 @@ export type HealthPayload = {
   status: "ok";
   mode: "ready";
   appVersion: string;
-  dbPath: string;
+  dbPath: string | null;
+  storageConfigured: boolean;
+  storageFolder: string | null;
+};
+
+export type StorageConfig = {
+  isConfigured: boolean;
+  selectedFolder: string | null;
+  dbPath: string | null;
+  source: "env" | "user_selected" | "unset";
 };
 
 export type Prompt = {
@@ -91,6 +100,10 @@ export type MenuCommand = "new" | "save" | "focus-search";
 
 export type VaultApi = {
   health: () => Promise<Result<HealthPayload>>;
+  storage: {
+    getConfig: () => Promise<Result<StorageConfig>>;
+    chooseFolder: () => Promise<Result<StorageConfig>>;
+  };
   prompt: {
     list: (input: PromptListInput) => Promise<Result<PromptListOutput>>;
     get: (promptId: string) => Promise<Result<Prompt>>;

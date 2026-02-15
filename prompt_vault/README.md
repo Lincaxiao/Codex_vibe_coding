@@ -1,60 +1,153 @@
-# Prompt Vault (macOS Electron Rewrite)
+# Prompt Vault（用户手册）
 
-Prompt Vault is now a macOS-only desktop app built with Electron + TypeScript + React + SQLite.
+Prompt Vault 是一个 **本地优先** 的提示词管理应用（macOS 版）。
+你可以用它集中管理常用 Prompt、按关键词检索、做变量渲染、并导入/导出你的提示词库。
 
-## Stack
+## 这个应用适合谁
 
-- Desktop shell: Electron
-- Main process: TypeScript + better-sqlite3 (FTS5)
-- Renderer: React + Vite
-- API boundary: `window.vault.*` IPC contract
+- 你经常需要重复使用 Prompt（写作、编程、复盘、汇报等）
+- 你希望把 Prompt 结构化保存，不想散落在笔记和聊天记录里
+- 你希望所有数据都保留在本机，而不是依赖云端服务
 
-## Security Notes
+## 你可以做什么
 
-- Import/export paths are selected only in the main process via system dialogs.
-- Renderer does not pass arbitrary filesystem paths to backend handlers.
-- Production renderer uses a strict Content Security Policy.
+- 新建、编辑、保存提示词
+- 用标题/正文/标签搜索
+- 软删除提示词（不会立即物理清除）
+- 为提示词打标签并按标签检索
+- 使用 `{{变量}}` 模板进行渲染
+- 一键复制渲染结果到剪贴板
+- 从 JSON 导入提示词
+- 导出为 JSON 或 Markdown
 
-## Development
+## 安装与启动（macOS）
 
-```bash
-cd prompt_vault
-npm install
-npm run dev
+### 方式一：安装包（推荐普通用户）
+
+1. 打开 `PromptVault-*.dmg`
+2. 将 `Prompt Vault.app` 拖入 `Applications`
+3. 到“应用程序”中打开
+
+说明：
+- **不需要每次都重新安装**。
+- 日常使用直接打开 `Prompt Vault.app` 即可。
+- 只有你拿到新版本时，才需要重新安装/覆盖安装。
+
+### 方式二：临时运行（维护者/源码使用场景）
+
+如果你使用的是源码版本而非 dmg，通常由维护者提供启动方式。
+
+## 首次使用（3 分钟）
+
+1. 首次打开时，先在弹窗里选择一个“数据存储文件夹”
+2. 点击右上角 `新建`
+3. 填写标题、正文、标签
+4. 点击 `保存`
+5. 在右侧“渲染区”输入变量（例如：`name=Alice;date=2026-02-15`）
+6. 点击 `渲染` 或 `复制渲染结果`
+
+## 功能说明
+
+### 1) 列表与搜索
+
+- 左侧列表展示所有提示词（默认不含已删除）
+- 搜索框支持：标题、正文、标签
+- 勾选“包含已删除”后可查看软删除记录
+
+### 2) 编辑区
+
+- 中间栏用于编辑当前提示词
+- `标题`：用于区分用途
+- `标签`：支持逗号分隔（自动去重）
+- `正文`：支持模板变量，如 `{{name}}`
+- 点击 `保存` 更新当前提示词
+
+### 3) 软删除
+
+- `软删除` 只做删除标记，不立即清空数据库
+- 删除后的记录在默认列表不可见
+- 勾选“包含已删除”后可看到它
+
+### 4) 渲染区
+
+- 变量输入格式：`key=value;key2=value2`
+- 点击 `渲染` 查看结果
+- 点击 `复制渲染结果` 可直接用于粘贴
+- 未提供的变量会保留原占位符（例如 `{{missing_key}}`）
+
+### 5) 导入与导出
+
+- 点击 `导入`：选择 JSON 文件后导入
+- 点击 `导出`：选择格式（JSON/Markdown）并保存
+- 可选“包含已删除记录”
+
+### 6) 存储位置
+
+- 点击顶部 `存储位置` 可随时更换数据库目录
+- 数据库文件固定命名为 `prompt_vault.sqlite`
+- 该文件会写入你选择的目录中
+
+## JSON 导入格式（示例）
+
+```json
+[
+  {
+    "title": "日报总结",
+    "body": "请总结 {{date}} 的工作进展",
+    "tags": ["日报", "总结"],
+    "is_deleted": false
+  },
+  {
+    "title": "代码审查",
+    "body": "请审查以下代码并指出风险：{{code}}",
+    "tags": ["代码", "审查"]
+  }
+]
 ```
 
-`npm run dev` 会直接启动 Electron 桌面窗口并启用前端热更新。
-日常调试 GUI 不需要每次打包成 dmg。
+字段说明：
+- `title`：标题（必填）
+- `body`：正文（必填）
+- `tags`：标签数组（可选）
+- `is_deleted` / `isDeleted`：是否导入后标记为已删除（可选）
 
-如果你只想快速看当前构建效果（不打包）：
+## 快捷键
 
-```bash
-cd prompt_vault
-npm run build
-npm start
-```
+- `Cmd + N`：新建提示词
+- `Cmd + S`：保存当前提示词
+- `Cmd + F`：聚焦搜索框
 
-## Test
+## 数据存储与隐私
 
-```bash
-cd prompt_vault
-npm run test
-```
+- 数据保存在你手动选择的文件夹里（不会强制用默认目录）
+- 数据库文件名：`prompt_vault.sqlite`
 
-`npm run test` 会先执行 `npm rebuild better-sqlite3`，避免在执行过 `dist:mac` 后出现 Node/Electron ABI 不匹配。
+提示：
+- 该应用不依赖云端账号，核心读写都在本地完成。
+- 建议定期备份数据库文件或导出 JSON。
 
-Optional Electron e2e smoke test:
+## 常见问题
 
-```bash
-cd prompt_vault
-E2E_RUN=1 npm run test:e2e
-```
+### Q1：每次看效果都要重新安装吗？
+不用。安装一次后，直接打开应用即可。只有升级到新版本时才需要重新安装。
 
-## Build macOS package
+### Q2：为什么导入后有些记录被“跳过”？
+常见原因：
+- 标题为空
+- 正文为空
+- 与现有记录内容重复
 
-```bash
-cd prompt_vault
-npm run dist:mac
-```
+### Q3：为什么搜索不到某条提示词？
+请检查：
+- 是否被软删除（可勾选“包含已删除”）
+- 关键词是否在标题/正文/标签中存在
 
-This rewrite is intentionally not backward-compatible with the previous Python implementation.
+### Q4：白屏/无法加载怎么办？
+请先确认你使用的是最新安装包；如果是历史包，建议升级到最新版本后再试。
+
+### Q5：我选错了存储文件夹怎么办？
+点击顶部 `存储位置`，重新选择一个目录即可。之后新数据会写入新目录。
+
+## 版本说明
+
+当前版本为本地重写版本，不兼容早期 Python 版的数据结构与启动方式。
