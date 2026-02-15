@@ -564,6 +564,59 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertTrue(any("[round1] 调用 Codex" in item for item in messages))
         self.assertTrue(any("[workflow] 结束，状态：succeeded" in item for item in messages))
 
+    def test_default_prompt_is_self_contained_without_source_requirement(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True)
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            workflow_run_id="wf_self_contained_prompt",
+        )
+        prompt = fake_executor.calls[0].prompt
+        self.assertIn("必须自包含", prompt)
+        self.assertNotIn("Source:", prompt)
+
+    def test_custom_prompt_templates_are_applied(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True)
+        fake_check = FakeCheckRunner(outcomes=[False, True])
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=fake_check,  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        custom_templates = {
+            "round1": "ROUND1 CUSTOM {{lecture_scope}} {{target_lecture_dir}}",
+            "repair": "REPAIR CUSTOM {{check_errors}} {{check_warnings}}",
+        }
+        template_path = self.config.project_root / "artifacts" / "prompt_templates.json"
+        template_path.parent.mkdir(parents=True, exist_ok=True)
+        template_path.write_text(json.dumps(custom_templates, ensure_ascii=False) + "\n", encoding="utf-8")
+        lecture_dir = (self.tmp_path / "ECE364" / "LEC01").resolve()
+        lecture_dir.mkdir(parents=True, exist_ok=True)
+
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            workflow_run_id="wf_custom_prompt",
+            target_lectures=["LEC01"],
+            target_lecture_dir=lecture_dir,
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(len(fake_executor.calls), 2)
+        self.assertIn("ROUND1 CUSTOM LEC01", fake_executor.calls[0].prompt)
+        self.assertIn(str(lecture_dir), fake_executor.calls[0].prompt)
+        self.assertIn("REPAIR CUSTOM", fake_executor.calls[1].prompt)
+        self.assertIn("mock check failed", fake_executor.calls[1].prompt)
+
     def test_target_lecture_dir_propagates_to_prompt_and_codex_access(self) -> None:
         fake_executor = FakeCodexExecutor(default_success=True)
         orchestrator = WorkflowOrchestrator(

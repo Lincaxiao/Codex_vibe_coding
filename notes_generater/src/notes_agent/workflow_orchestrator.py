@@ -11,6 +11,7 @@ from .check_runner import CheckRunResult, CheckRunner
 from .codex_executor import CodexExecutor, CodexRunRequest, CodexRunResult
 from .diff_service import DiffService, DiffSummary
 from .path_utils import validate_path_component
+from .prompt_template_service import PromptTemplateService
 from .project_service import ProjectService
 from .round0_initializer import Round0Initializer
 from .snapshot_service import SnapshotService
@@ -92,6 +93,7 @@ class WorkflowOrchestrator:
         round0_initializer: Round0Initializer | None = None,
         diff_service: DiffService | None = None,
         snapshot_service: SnapshotService | None = None,
+        prompt_template_service: PromptTemplateService | None = None,
     ) -> None:
         self.project_service = project_service or ProjectService()
         self.codex_executor = codex_executor or CodexExecutor()
@@ -99,6 +101,7 @@ class WorkflowOrchestrator:
         self.round0_initializer = round0_initializer or Round0Initializer()
         self.diff_service = diff_service or DiffService()
         self.snapshot_service = snapshot_service or SnapshotService()
+        self.prompt_template_service = prompt_template_service or PromptTemplateService()
 
     def run(
         self,
@@ -124,6 +127,7 @@ class WorkflowOrchestrator:
         config = self.project_service.load_project_config(root)
         notes = Path(notes_root).expanduser().resolve() if notes_root else config.notes_root
         lecture_dir = self._resolve_target_lecture_dir(target_lecture_dir)
+        prompt_templates = self.prompt_template_service.load_templates(project_root=root)
         if max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {max_retries}")
         pause_after_round = config.pause_after_each_round if pause_after_each_round is None else pause_after_each_round
@@ -288,6 +292,7 @@ class WorkflowOrchestrator:
                     target_lectures=target_lectures or [],
                     target_lecture_dir=lecture_dir,
                     allow_external_refs=allow_external_refs,
+                    template_text=prompt_templates.get(round_name),
                 )
                 codex_run_id = f"{workflow_id}_{round_name}"
                 round_search_enabled = self._resolve_search_enabled(
@@ -331,6 +336,7 @@ class WorkflowOrchestrator:
                             round_name=round_name,
                             check_result=check_result,
                             notes_root=notes,
+                            template_text=prompt_templates.get("repair"),
                         )
                         repair_run_id = f"{workflow_id}_{round_name}_repair1"
                         repair_result = self.codex_executor.run(
@@ -651,37 +657,24 @@ class WorkflowOrchestrator:
         target_lectures: list[str],
         target_lecture_dir: Path | None,
         allow_external_refs: bool,
+        template_text: str | None,
     ) -> str:
         lecture_scope = ", ".join(target_lectures) if target_lectures else "all lectures"
-        lecture_dir_rule = (
-            f"目标讲次资料目录：{target_lecture_dir}\n请优先读取该目录下与本轮目标讲次相关的资料。"
-            if target_lecture_dir is not None
-            else "目标讲次资料目录：未指定（可在允许范围内自行定位本地资料）。"
-        )
+        lecture_dir_rule = str(target_lecture_dir) if target_lecture_dir is not None else "未指定"
         external_rule = (
-            "Final 轮允许扩展阅读，但必须单独分节并标注来源链接。"
+            "Final 轮允许扩展阅读，但仍需以本地课程材料为主。"
             if allow_external_refs and round_name == "final"
             else "禁止依赖外部资料，仅基于本地素材与现有笔记。"
         )
-        round_task = {
-            "round1": "按 lecture 生成 skeleton 草稿。",
-            "round2": "扩展可读内容、示例、练习与易错点。",
-            "round3": "读取 review/feedback.md，仅处理未勾选项并写 resolution。",
-            "final": "更新 cheatsheet、清洗 glossary、整理最终一致性。",
-        }.get(round_name, "执行当前轮次任务。")
-        return (
-            "你是课程笔记生成助手。\n"
-            f"当前轮次：{round_name}\n"
-            f"目标范围：{lecture_scope}\n"
-            f"任务：{round_task}\n"
-            f"工作目录中的 notes_root: {notes_root}\n"
-            f"{lecture_dir_rule}\n"
-            f"{external_rule}\n"
-            "全局要求：\n"
-            "1. 全文中文解释（代码块和专有名词可保留英文）。\n"
-            "2. 非平凡结论增加 Source: 标记。\n"
-            "3. 只做本轮必要修改，不要大范围重写。\n"
-            "4. 完成后结束。\n"
+        return self._render_prompt_template(
+            template_text=template_text,
+            values={
+                "round_name": round_name,
+                "lecture_scope": lecture_scope,
+                "notes_root": str(notes_root),
+                "target_lecture_dir": lecture_dir_rule,
+                "external_rule": external_rule,
+            },
         )
 
     def _build_repair_prompt(
@@ -690,26 +683,33 @@ class WorkflowOrchestrator:
         round_name: RoundName,
         check_result: CheckRunResult,
         notes_root: Path,
+        template_text: str | None,
     ) -> str:
         payload = check_result.payload or {}
         errors = payload.get("errors", [])
         warnings = payload.get("warnings", [])
         error_text = "\n".join(f"- {item}" for item in errors) if errors else "- 无"
         warning_text = "\n".join(f"- {item}" for item in warnings) if warnings else "- 无"
-        return (
-            "你是课程笔记修复助手，仅修复检查器指出的问题。\n"
-            f"轮次：{round_name}\n"
-            f"notes_root: {notes_root}\n"
-            "检查错误：\n"
-            f"{error_text}\n"
-            "检查警告：\n"
-            f"{warning_text}\n"
-            "要求：\n"
-            "1. 只修改与错误直接相关的文件。\n"
-            "2. 保持中文解释与 Source 标记规范。\n"
-            "3. 不新增无关内容。\n"
-            "4. 完成后结束。\n"
+        return self._render_prompt_template(
+            template_text=template_text,
+            values={
+                "round_name": round_name,
+                "notes_root": str(notes_root),
+                "check_errors": error_text,
+                "check_warnings": warning_text,
+            },
         )
+
+    def _render_prompt_template(
+        self,
+        *,
+        template_text: str | None,
+        values: dict[str, str],
+    ) -> str:
+        text = template_text or ""
+        for key, value in values.items():
+            text = text.replace(f"{{{{{key}}}}}", value)
+        return text
 
     def _check_error_summary(self, check_result: CheckRunResult) -> str:
         payload = check_result.payload or {}

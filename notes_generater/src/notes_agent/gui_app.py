@@ -12,6 +12,7 @@ from .codex_executor import CodexExecutor
 from .feedback_service import FeedbackService
 from .gui_settings import load_gui_settings, save_gui_settings
 from .models import CreateProjectRequest, ProjectConfig
+from .prompt_template_service import DEFAULT_PROMPT_TEMPLATES, PROMPT_TEMPLATE_KEYS, PromptTemplateService
 from .project_service import ProjectService, slugify_course_id
 from .round0_initializer import Round0Initializer
 from .run_history_service import RunHistoryService
@@ -55,6 +56,7 @@ def main() -> int:
             QPlainTextEdit,
             QComboBox,
             QStackedWidget,
+            QTabWidget,
             QVBoxLayout,
             QWidget,
             QCheckBox,
@@ -97,22 +99,26 @@ def main() -> int:
             self.check_runner = CheckRunner()
             self.feedback_service = FeedbackService()
             self.run_history_service = RunHistoryService()
+            self.prompt_template_service = PromptTemplateService()
             self.codex_executor = CodexExecutor(exec_timeout_seconds=10 * 60)
             self.workflow_orchestrator = WorkflowOrchestrator(
                 project_service=self.project_service,
                 codex_executor=self.codex_executor,
                 check_runner=self.check_runner,
                 round0_initializer=self.round0_initializer,
+                prompt_template_service=self.prompt_template_service,
             )
             self.current_config: ProjectConfig | None = None
             self._threads: list[QThread] = []
             self._workers: list[TaskWorker] = []
             self.settings = load_gui_settings()
             self.nav_buttons: list[QPushButton] = []
+            self.prompt_editors: dict[str, QPlainTextEdit] = {}
 
             self._build_ui()
             self._apply_theme()
             self._apply_settings()
+            self._load_prompt_templates_for_current_project()
             self._switch_page(0)
             self._log("界面初始化完成")
 
@@ -136,7 +142,8 @@ def main() -> int:
             self._add_nav_button(sidebar_layout, "项目", 0)
             self._add_nav_button(sidebar_layout, "流程", 1)
             self._add_nav_button(sidebar_layout, "审阅", 2)
-            self._add_nav_button(sidebar_layout, "运行记录", 3)
+            self._add_nav_button(sidebar_layout, "提示词", 3)
+            self._add_nav_button(sidebar_layout, "运行记录", 4)
             sidebar_layout.addStretch(1)
             sidebar_layout.addWidget(QLabel("macOS 本地模式", objectName="SidebarFootnote"))
 
@@ -163,6 +170,7 @@ def main() -> int:
             self.page_stack.addWidget(self._build_project_page())
             self.page_stack.addWidget(self._build_workflow_page())
             self.page_stack.addWidget(self._build_review_page())
+            self.page_stack.addWidget(self._build_prompt_page())
             self.page_stack.addWidget(self._build_runs_page())
 
             log_card = QFrame(objectName="LogCard")
@@ -302,6 +310,47 @@ def main() -> int:
             add_feedback_btn.clicked.connect(self._on_add_feedback)
             layout.addWidget(self.feedback_input, 1)
             layout.addWidget(add_feedback_btn, 0, Qt.AlignLeft)  # type: ignore[arg-type]
+            return page
+
+        def _build_prompt_page(self) -> QWidget:
+            page = QFrame(objectName="PageCard")
+            layout = QVBoxLayout(page)
+            layout.setContentsMargins(16, 16, 16, 16)
+            layout.setSpacing(12)
+
+            heading = QLabel("系统提示词", objectName="PageHeading")
+            hint = QLabel("查看并修改各阶段提示词模板，保存后对后续轮次生效。", objectName="PageHint")
+            layout.addWidget(heading)
+            layout.addWidget(hint)
+
+            tab = QTabWidget()
+            stage_titles = {
+                "round1": "Round1",
+                "round2": "Round2",
+                "round3": "Round3",
+                "final": "Final",
+                "repair": "Repair",
+            }
+            for key in PROMPT_TEMPLATE_KEYS:
+                editor = QPlainTextEdit()
+                editor.setPlaceholderText(f"{stage_titles.get(key, key)} 提示词")
+                self.prompt_editors[key] = editor
+                tab.addTab(editor, stage_titles.get(key, key))
+            layout.addWidget(tab, 1)
+
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            load_btn = QPushButton("读取项目提示词")
+            load_btn.clicked.connect(self._on_reload_prompt_templates)
+            save_btn = QPushButton("保存提示词")
+            save_btn.clicked.connect(self._on_save_prompt_templates)
+            reset_btn = QPushButton("恢复默认模板")
+            reset_btn.clicked.connect(self._on_reset_prompt_templates)
+            row.addWidget(load_btn)
+            row.addWidget(save_btn)
+            row.addWidget(reset_btn)
+            row.addStretch(1)
+            layout.addLayout(row)
             return page
 
         def _build_runs_page(self) -> QWidget:
@@ -570,6 +619,7 @@ def main() -> int:
             self.project_root_edit.setText(str(config.project_root))
             self.notes_root_edit.setText(str(config.notes_root))
             self._update_header()
+            self._load_prompt_templates_for_current_project()
             self._save_settings()
             self._log(f"项目已就绪: {config.project_root}")
 
@@ -585,9 +635,17 @@ def main() -> int:
                     self._error(str(exc))
                     return None
                 self._update_header()
+                self._load_prompt_templates_for_current_project()
                 return self.current_config
             self._error("请先创建或加载项目")
             return None
+
+        def _load_prompt_templates_for_current_project(self) -> None:
+            if not self.current_config:
+                self._fill_prompt_editors(DEFAULT_PROMPT_TEMPLATES)
+                return
+            templates = self.prompt_template_service.load_templates(project_root=self.current_config.project_root)
+            self._fill_prompt_editors(templates)
 
         def _on_init_round0(self) -> None:
             config = self._require_config()
@@ -641,6 +699,11 @@ def main() -> int:
                 )
                 return result.to_dict()
 
+            try:
+                self._save_prompt_templates_for_project(config)
+            except OSError as exc:
+                self._error(f"保存提示词失败: {exc}")
+                return
             self._save_settings()
             self._run_task(f"执行流程 {from_round}->{to_round}", task)
 
@@ -672,6 +735,11 @@ def main() -> int:
                 )
                 return result.to_dict()
 
+            try:
+                self._save_prompt_templates_for_project(config)
+            except OSError as exc:
+                self._error(f"保存提示词失败: {exc}")
+                return
             self._save_settings()
             self._run_task(f"恢复流程 -> {to_round}", task)
 
@@ -701,6 +769,43 @@ def main() -> int:
             result = self.feedback_service.append_feedback(notes_root=config.notes_root, items=lines)
             self.feedback_input.clear()
             self._log(_to_json(result.to_dict()))
+
+        def _on_reload_prompt_templates(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+            templates = self.prompt_template_service.load_templates(project_root=config.project_root)
+            self._fill_prompt_editors(templates)
+            self._log(f"提示词已读取: {self.prompt_template_service.template_path(project_root=config.project_root)}")
+
+        def _on_save_prompt_templates(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+            try:
+                path = self._save_prompt_templates_for_project(config)
+            except OSError as exc:
+                self._error(f"保存提示词失败: {exc}")
+                return
+            self._log(f"提示词已保存: {path}")
+
+        def _on_reset_prompt_templates(self) -> None:
+            self._fill_prompt_editors(DEFAULT_PROMPT_TEMPLATES)
+            self._log("已恢复默认提示词模板（请点击“保存提示词”写入项目）")
+
+        def _fill_prompt_editors(self, templates: dict[str, str]) -> None:
+            for key, editor in self.prompt_editors.items():
+                editor.setPlainText(templates.get(key, ""))
+
+        def _save_prompt_templates_for_project(self, config: ProjectConfig) -> Path:
+            templates = {
+                key: editor.toPlainText()
+                for key, editor in self.prompt_editors.items()
+            }
+            return self.prompt_template_service.save_templates(
+                project_root=config.project_root,
+                templates=templates,
+            )
 
         def _on_list_runs(self) -> None:
             config = self._require_config()
