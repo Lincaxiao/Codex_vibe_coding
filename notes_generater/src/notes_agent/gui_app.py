@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .check_runner import CheckRunner
+from .cache_service import CacheService
 from .codex_executor import CodexExecutor
 from .feedback_service import FeedbackService
 from .gui_settings import load_gui_settings, save_gui_settings
@@ -97,6 +98,7 @@ def main() -> int:
             self.project_service = ProjectService()
             self.round0_initializer = Round0Initializer()
             self.check_runner = CheckRunner()
+            self.cache_service = CacheService()
             self.feedback_service = FeedbackService()
             self.run_history_service = RunHistoryService()
             self.prompt_template_service = PromptTemplateService()
@@ -374,6 +376,8 @@ def main() -> int:
             list_runs_btn.clicked.connect(self._on_list_runs)
             show_patch_btn = QPushButton("查看差异补丁")
             show_patch_btn.clicked.connect(self._on_show_patch)
+            clear_cache_btn = QPushButton("清除缓存")
+            clear_cache_btn.clicked.connect(self._on_clear_cache)
 
             row.addWidget(QLabel("运行编号"))
             row.addWidget(self.patch_run_id_edit, 1)
@@ -381,6 +385,7 @@ def main() -> int:
             row.addWidget(self.patch_round_edit, 1)
             row.addWidget(list_runs_btn)
             row.addWidget(show_patch_btn)
+            row.addWidget(clear_cache_btn)
 
             layout.addLayout(row)
             helper = QLabel("提示：先点“列出运行记录”，再复制运行编号查看补丁。", objectName="PageHint")
@@ -839,6 +844,37 @@ def main() -> int:
                 self._error("未找到对应补丁")
                 return
             self._log(patch)
+
+        def _on_clear_cache(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+            if self._threads:
+                self._error("当前有任务运行中，请先等待完成后再清理缓存")
+                return
+
+            confirm = QMessageBox.question(
+                self,
+                "确认清除缓存",
+                (
+                    "将删除项目中的中间文件（runs 与 artifacts 缓存），\n"
+                    "不会删除已生成的笔记内容。是否继续？"
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                return
+
+            def task(progress: Callable[[str], None]) -> dict[str, Any]:
+                result = self.cache_service.clear_intermediate_files(
+                    project_root=config.project_root,
+                    preserve_prompt_templates=True,
+                    progress_callback=progress,
+                )
+                return result.to_dict()
+
+            self._run_task("清除中间缓存", task)
 
         def _run_task(self, title: str, fn: Callable[[Callable[[str], None]], Any]) -> None:
             self._set_status(f"执行中: {title}", running=True)
