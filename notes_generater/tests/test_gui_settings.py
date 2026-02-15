@@ -29,6 +29,7 @@ class GuiSettingsTests(unittest.TestCase):
                 max_changed_files=12,
                 pause_after_each_round=True,
                 search_enabled=True,
+                allow_external_refs=True,
             )
             save_gui_settings(original, settings_path)
             loaded = load_gui_settings(settings_path)
@@ -51,12 +52,14 @@ class GuiSettingsTests(unittest.TestCase):
         payload = {
             "pause_after_each_round": "false",
             "search_enabled": "true",
+            "allow_external_refs": "1",
             "max_changed_lines": "not-an-int",
             "max_changed_files": None,
         }
         settings = GuiSettings.from_dict(payload)
         self.assertFalse(settings.pause_after_each_round)
         self.assertTrue(settings.search_enabled)
+        self.assertTrue(settings.allow_external_refs)
         self.assertEqual(settings.max_changed_lines, 500)
         self.assertEqual(settings.max_changed_files, 20)
 

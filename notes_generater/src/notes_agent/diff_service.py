@@ -81,7 +81,8 @@ class DiffService:
             )
             for line in diff_lines:
                 patch_lines.append(line + "\n")
-                if line.startswith("+++") or line.startswith("---"):
+                # Skip unified diff file headers only (e.g. '+++ b/file', '--- a/file').
+                if line.startswith("+++ ") or line.startswith("--- "):
                     continue
                 if line.startswith("+"):
                     added_lines += 1

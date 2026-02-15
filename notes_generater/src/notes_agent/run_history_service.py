@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -85,8 +86,10 @@ class RunHistoryService:
                 )
             )
 
-        # Newest first by run_id name; run_id includes timestamp in this project.
-        records.sort(key=lambda item: item.run_id, reverse=True)
+        records.sort(
+            key=lambda item: (self._sort_timestamp(record=item), item.run_id),
+            reverse=True,
+        )
         return records
 
     def latest_workflow_result(self, *, project_root: Path | str) -> dict[str, Any] | None:
@@ -173,6 +176,28 @@ class RunHistoryService:
             if isinstance(value, str) and value:
                 return value
         return None
+
+    def _sort_timestamp(self, *, record: RunRecord) -> float:
+        created_at = record.created_at
+        if isinstance(created_at, str) and created_at:
+            parsed = self._parse_iso_datetime(created_at)
+            if parsed is not None:
+                return parsed.timestamp()
+        try:
+            return record.path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def _parse_iso_datetime(self, value: str) -> datetime | None:
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
 
     def _read_json(self, path: Path) -> dict[str, Any]:
         try:

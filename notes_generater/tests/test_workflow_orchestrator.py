@@ -285,6 +285,29 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(result.rounds[0].round_name, "round0")
         self.assertTrue((self.config.notes_root / "scripts" / "check.sh").exists())
 
+    def test_round0_only_workflow_does_not_require_lecture_registry(self) -> None:
+        self.lecture_registry_service.remove_lecture(
+            project_root=self.config.project_root,
+            lec_id="LEC01",
+        )
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
+            check_runner=CheckRunner(),
+            round0_initializer=Round0Initializer(),
+        )
+
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round0",
+            to_round="round0",
+            workflow_run_id="wf_round0_no_registry",
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(len(result.rounds), 1)
+        self.assertEqual(result.rounds[0].round_name, "round0")
+
     def test_resume_from_paused_round(self) -> None:
         fake_executor = FakeCodexExecutor(default_success=True, mutate_rel_path="notes/lectures/lecture01.md")
         fake_check = FakeCheckRunner(outcomes=[True, True])

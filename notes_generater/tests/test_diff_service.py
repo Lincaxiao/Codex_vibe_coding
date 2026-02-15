@@ -79,6 +79,23 @@ class DiffServiceTests(unittest.TestCase):
         self.assertIn("notes/lectures/safe.md", state)
         self.assertNotIn("notes/lectures/outside_link.md", state)
 
+    def test_changed_lines_counts_content_starting_with_plus_signs(self) -> None:
+        file_path = self.notes_root / "notes" / "lectures" / "plus.md"
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        before = self.service.capture_state(notes_root=self.notes_root)
+
+        file_path.write_text("+++not-header\n---also-content\n", encoding="utf-8")
+        after = self.service.capture_state(notes_root=self.notes_root)
+        summary = self.service.write_diff_artifacts(
+            notes_root=self.notes_root,
+            before_state=before,
+            after_state=after,
+            run_dir=self.run_dir,
+        )
+
+        self.assertEqual(summary.added_lines, 2)
+        self.assertEqual(summary.removed_lines, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

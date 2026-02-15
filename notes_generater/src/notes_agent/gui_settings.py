@@ -41,6 +41,7 @@ class GuiSettings:
     max_changed_files: int = 20
     pause_after_each_round: bool = False
     search_enabled: bool = False
+    allow_external_refs: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +54,7 @@ class GuiSettings:
             "max_changed_files": self.max_changed_files,
             "pause_after_each_round": self.pause_after_each_round,
             "search_enabled": self.search_enabled,
+            "allow_external_refs": self.allow_external_refs,
         }
 
     @classmethod
@@ -67,6 +69,7 @@ class GuiSettings:
             max_changed_files=_as_int(payload.get("max_changed_files", 20), 20),
             pause_after_each_round=_as_bool(payload.get("pause_after_each_round", False), False),
             search_enabled=_as_bool(payload.get("search_enabled", False), False),
+            allow_external_refs=_as_bool(payload.get("allow_external_refs", False), False),
         )
 
 

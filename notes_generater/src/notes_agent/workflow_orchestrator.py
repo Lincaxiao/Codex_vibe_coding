@@ -133,11 +133,17 @@ class WorkflowOrchestrator:
             if workflow_run_id is not None
             else _default_workflow_run_id()
         )
-        lecture_scope = self.lecture_registry_service.resolve_paths(
-            project_root=root,
-            target_lectures=target_lectures or [],
-        )
-        extra_allowed_dirs = self._collect_extra_allowed_dirs(lecture_scope)
+        rounds = self._select_rounds(from_round=from_round, to_round=to_round)
+        requires_lecture_scope = any(round_name != "round0" for round_name in rounds)
+        if requires_lecture_scope:
+            lecture_scope = self.lecture_registry_service.resolve_paths(
+                project_root=root,
+                target_lectures=target_lectures or [],
+            )
+            extra_allowed_dirs = self._collect_extra_allowed_dirs(lecture_scope)
+        else:
+            lecture_scope = {}
+            extra_allowed_dirs = []
         prompt_templates = self.prompt_template_service.load_templates(project_root=root)
         if max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {max_retries}")
@@ -146,18 +152,19 @@ class WorkflowOrchestrator:
         changed_files_limit = config.max_changed_files if max_changed_files is None else max_changed_files
         workflow_dir = root / "runs" / workflow_id
         workflow_dir.mkdir(parents=True, exist_ok=False)
-
-        rounds = self._select_rounds(from_round=from_round, to_round=to_round)
         round_results: list[RoundExecutionResult] = []
         workflow_status = "succeeded"
         self._emit_progress(
             progress_callback,
             f"[workflow] 启动 workflow_id={workflow_id}，执行轮次：{from_round}->{to_round} ({', '.join(rounds)})",
         )
-        self._emit_progress(
-            progress_callback,
-            f"[workflow] 目标讲次：{', '.join(lecture_scope.keys())}",
-        )
+        if lecture_scope:
+            self._emit_progress(
+                progress_callback,
+                f"[workflow] 目标讲次：{', '.join(lecture_scope.keys())}",
+            )
+        else:
+            self._emit_progress(progress_callback, "[workflow] 当前执行范围仅 round0，跳过讲次映射检查")
 
         session_path = root / "state" / "session.json"
         round_status_path = root / "state" / "round_status.json"

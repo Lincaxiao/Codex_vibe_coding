@@ -352,7 +352,7 @@ def main() -> int:
                 prompt_text = args.prompt
             else:
                 prompt_text = _read_text_file(args.prompt_file, field_name="prompt_file")
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
             return 2
 
@@ -439,7 +439,7 @@ def main() -> int:
                 max_changed_lines=args.max_changed_lines,
                 max_changed_files=args.max_changed_files,
             )
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
             return 2
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
@@ -473,7 +473,7 @@ def main() -> int:
                 max_changed_lines=args.max_changed_lines,
                 max_changed_files=args.max_changed_files,
             )
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
             return 2
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))

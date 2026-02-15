@@ -78,6 +78,42 @@ class RunHistoryServiceTests(unittest.TestCase):
         assert latest is not None
         self.assertEqual(latest["workflow_run_id"], "wf_002")
 
+    def test_latest_workflow_prefers_timestamp_over_run_id_lexical_order(self) -> None:
+        older_dir = self.config.project_root / "runs" / "zz_older_named_high"
+        older_dir.mkdir(parents=True, exist_ok=True)
+        (older_dir / "workflow_result.json").write_text(
+            json.dumps(
+                {
+                    "workflow_run_id": "zz_older_named_high",
+                    "status": "succeeded",
+                    "started_at": "2026-01-01T00:00:00+00:00",
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        newer_dir = self.config.project_root / "runs" / "aa_newer_named_low"
+        newer_dir.mkdir(parents=True, exist_ok=True)
+        (newer_dir / "workflow_result.json").write_text(
+            json.dumps(
+                {
+                    "workflow_run_id": "aa_newer_named_low",
+                    "status": "succeeded",
+                    "started_at": "2026-02-01T00:00:00+00:00",
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        latest = self.service.latest_workflow_result(project_root=self.config.project_root)
+        self.assertIsNotNone(latest)
+        assert latest is not None
+        self.assertEqual(latest["workflow_run_id"], "aa_newer_named_low")
+
     def test_load_round_status(self) -> None:
         path = self.config.project_root / "state" / "round_status.json"
         path.write_text(

@@ -314,6 +314,7 @@ def main() -> int:
             self.max_files_edit = QLineEdit()
             self.pause_each_round_check = QCheckBox("每轮后暂停")
             self.search_check = QCheckBox("启用网页搜索")
+            self.allow_external_refs_check = QCheckBox("允许外部参考（Final）")
 
             init_round0_btn = QPushButton("初始化第 0 轮")
             init_round0_btn.clicked.connect(self._on_init_round0)
@@ -335,7 +336,8 @@ def main() -> int:
             grid.addWidget(QLabel("最大改动文件数"), 2, 2)
             grid.addWidget(self.max_files_edit, 2, 3)
             grid.addWidget(self.pause_each_round_check, 3, 0, 1, 2)
-            grid.addWidget(self.search_check, 3, 2, 1, 2)
+            grid.addWidget(self.search_check, 3, 2)
+            grid.addWidget(self.allow_external_refs_check, 3, 3)
             grid.addWidget(init_round0_btn, 4, 0)
             grid.addWidget(run_workflow_btn, 4, 1)
             grid.addWidget(run_check_btn, 4, 2)
@@ -602,6 +604,7 @@ def main() -> int:
             self.max_files_edit.setText(str(self.settings.max_changed_files))
             self.pause_each_round_check.setChecked(self.settings.pause_after_each_round)
             self.search_check.setChecked(self.settings.search_enabled)
+            self.allow_external_refs_check.setChecked(self.settings.allow_external_refs)
 
         def _save_settings(self) -> None:
             self.settings = replace(
@@ -615,6 +618,7 @@ def main() -> int:
                 max_changed_files=_safe_int(self.max_files_edit.text().strip(), 20),
                 pause_after_each_round=self.pause_each_round_check.isChecked(),
                 search_enabled=self.search_check.isChecked(),
+                allow_external_refs=self.allow_external_refs_check.isChecked(),
             )
             save_gui_settings(self.settings)
 
@@ -845,6 +849,11 @@ def main() -> int:
             max_files = _safe_int(self.max_files_edit.text().strip(), config.max_changed_files)
             search_enabled = self.search_check.isChecked()
             pause_each_round = self.pause_each_round_check.isChecked()
+            allow_external_refs = self.allow_external_refs_check.isChecked()
+            if search_enabled and not allow_external_refs:
+                allow_external_refs = True
+                self.allow_external_refs_check.setChecked(True)
+                self._log("已自动启用“允许外部参考（Final）”：网页搜索仅在该选项开启时生效，请注意外部信息风险。")
 
             def task(progress: Callable[[str], None]) -> dict[str, Any]:
                 result = self.workflow_orchestrator.run(
@@ -853,6 +862,7 @@ def main() -> int:
                     from_round=from_round,  # type: ignore[arg-type]
                     to_round=to_round,  # type: ignore[arg-type]
                     target_lectures=[target] if target else [],
+                    allow_external_refs=allow_external_refs,
                     search_enabled=search_enabled,
                     max_retries=0,
                     pause_after_each_round=pause_each_round,
@@ -880,6 +890,11 @@ def main() -> int:
             max_files = _safe_int(self.max_files_edit.text().strip(), config.max_changed_files)
             search_enabled = self.search_check.isChecked()
             pause_each_round = self.pause_each_round_check.isChecked()
+            allow_external_refs = self.allow_external_refs_check.isChecked()
+            if search_enabled and not allow_external_refs:
+                allow_external_refs = True
+                self.allow_external_refs_check.setChecked(True)
+                self._log("已自动启用“允许外部参考（Final）”：网页搜索仅在该选项开启时生效，请注意外部信息风险。")
 
             def task(progress: Callable[[str], None]) -> dict[str, Any]:
                 result = self.workflow_orchestrator.resume(
@@ -887,6 +902,7 @@ def main() -> int:
                     notes_root=config.notes_root,
                     to_round=to_round,  # type: ignore[arg-type]
                     target_lectures=[target] if target else [],
+                    allow_external_refs=allow_external_refs,
                     search_enabled=search_enabled,
                     max_retries=0,
                     pause_after_each_round=pause_each_round,
@@ -1033,6 +1049,9 @@ def main() -> int:
             self._run_task("清除中间缓存", task)
 
         def _run_task(self, title: str, fn: Callable[[Callable[[str], None]], Any]) -> None:
+            if self._threads:
+                self._error("当前已有任务运行中，请等待当前任务完成后再启动新任务")
+                return
             self._set_status(f"执行中: {title}", running=True)
             worker = TaskWorker(fn)
             thread = QThread(self)
