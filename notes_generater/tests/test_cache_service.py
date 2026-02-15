@@ -17,7 +17,7 @@ class CacheServiceTests(unittest.TestCase):
         self.project_service = ProjectService()
         self.cache_service = CacheService()
         self.config = self.project_service.create_project(
-            CreateProjectRequest(course_id="cache-test", workspace_root=self.tmp_path / "workspace")
+            CreateProjectRequest(course_id="cache-test", course_root=self.tmp_path / "workspace")
         )
 
     def tearDown(self) -> None:

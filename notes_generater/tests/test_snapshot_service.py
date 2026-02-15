@@ -43,7 +43,7 @@ class SnapshotServiceTests(unittest.TestCase):
     def _create_project(self) -> Path:
         workspace_root = self.tmp_path / "workspace"
         config = self.project_service.create_project(
-            CreateProjectRequest(course_id="cs-61a", workspace_root=workspace_root)
+            CreateProjectRequest(course_id="cs-61a", course_root=workspace_root)
         )
         return config.project_root
 

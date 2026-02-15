@@ -13,6 +13,8 @@ PROJECT_CONFIG_FILE = "project.yaml"
 STATE_DIR_NAME = "state"
 RUNS_DIR_NAME = "runs"
 ARTIFACTS_DIR_NAME = "artifacts"
+PROJECT_REL_PATH = Path(".notes_agent") / "project"
+NOTES_REL_PATH = Path("notes")
 
 
 def slugify_course_id(value: str) -> str:
@@ -49,9 +51,20 @@ class ProjectService:
         root = Path(project_root).expanduser().resolve()
         data = self._read_json(root / PROJECT_CONFIG_FILE)
         try:
-            return ProjectConfig.from_dict(data)
+            config = ProjectConfig.from_dict(data)
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"invalid project config: {root / PROJECT_CONFIG_FILE}") from exc
+
+        return replace(
+            config,
+            course_root=config.course_root.expanduser().resolve(),
+            project_root=config.project_root.expanduser().resolve(),
+            notes_root=config.notes_root.expanduser().resolve(),
+        )
+
+    def load_project_by_course_root(self, course_root: Path | str) -> ProjectConfig:
+        course = Path(course_root).expanduser().resolve()
+        return self.load_project_config(course / PROJECT_REL_PATH)
 
     def update_project_config(
         self,
@@ -66,50 +79,22 @@ class ProjectService:
         # Keep roots normalized to absolute paths.
         updated = replace(
             updated,
-            workspace_root=updated.workspace_root.resolve() if updated.workspace_root else None,
+            course_root=updated.course_root.resolve(),
             project_root=updated.project_root.resolve(),
             notes_root=updated.notes_root.resolve(),
         )
         self._write_project_config(updated)
         return updated
 
-    def discover_workspace_projects(self, workspace_root: Path | str) -> list[ProjectConfig]:
-        workspace = Path(workspace_root).expanduser().resolve()
-        projects_dir = workspace / "projects"
-        if not projects_dir.exists():
-            return []
-
-        results: list[ProjectConfig] = []
-        for config_path in sorted(projects_dir.glob(f"*/{PROJECT_CONFIG_FILE}")):
-            payload = self._read_json(config_path)
-            try:
-                results.append(ProjectConfig.from_dict(payload))
-            except (KeyError, TypeError, ValueError):
-                continue
-        return results
-
     def _resolve_config(self, request: CreateProjectRequest) -> ProjectConfig:
-        course_id = slugify_course_id(request.course_id)
-
-        workspace_root: Path | None = None
-        if request.workspace_root:
-            workspace_root = request.workspace_root.expanduser().resolve()
-
-        project_root = self._resolve_root(
-            explicit_root=request.project_root,
-            workspace_root=workspace_root,
-            default_child=f"projects/{course_id}",
-            root_name="project_root",
-        )
-        notes_root = self._resolve_root(
-            explicit_root=request.notes_root,
-            workspace_root=workspace_root,
-            default_child=f"notes/{course_id}",
-            root_name="notes_root",
-        )
+        course_root = request.course_root.expanduser().resolve()
+        course_id_raw = request.course_id if request.course_id else course_root.name
+        course_id = slugify_course_id(course_id_raw)
+        project_root = (course_root / PROJECT_REL_PATH).resolve()
+        notes_root = (course_root / NOTES_REL_PATH).resolve()
 
         return ProjectConfig(
-            workspace_root=workspace_root,
+            course_root=course_root,
             course_id=course_id,
             project_root=project_root,
             notes_root=notes_root,
@@ -121,20 +106,6 @@ class ProjectService:
             max_changed_files=request.max_changed_files,
             network_mode=request.network_mode,
         )
-
-    def _resolve_root(
-        self,
-        *,
-        explicit_root: Path | None,
-        workspace_root: Path | None,
-        default_child: str,
-        root_name: str,
-    ) -> Path:
-        if explicit_root:
-            return explicit_root.expanduser().resolve()
-        if workspace_root:
-            return (workspace_root / default_child).resolve()
-        raise ValueError(f"{root_name} is required when workspace_root is not provided")
 
     def _ensure_scaffold(self, project_root: Path, notes_root: Path) -> None:
         for path in (
@@ -194,7 +165,7 @@ class ProjectService:
         try:
             with path.open("r", encoding="utf-8") as fp:
                 payload = json.load(fp)
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError):
             return {}
         if isinstance(payload, dict):
             return payload

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import unittest
-from tempfile import TemporaryDirectory
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from notes_agent.models import CreateProjectRequest
-from notes_agent.project_service import ProjectService
+from notes_agent.project_service import PROJECT_REL_PATH, ProjectService
 
 
 class ProjectServiceTests(unittest.TestCase):
@@ -18,17 +18,17 @@ class ProjectServiceTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp_dir.cleanup()
 
-    def test_create_project_with_workspace_default_mapping(self) -> None:
-        workspace_root = self.tmp_path / "workspace"
+    def test_create_project_from_course_root(self) -> None:
+        course_root = self.tmp_path / "ECE364"
 
         config = self.service.create_project(
-            CreateProjectRequest(course_id="CS 61A", workspace_root=workspace_root)
+            CreateProjectRequest(course_root=course_root, course_id="ECE 364")
         )
-        workspace_resolved = workspace_root.resolve()
 
-        self.assertEqual(config.course_id, "cs-61a")
-        self.assertEqual(config.project_root, workspace_resolved / "projects" / "cs-61a")
-        self.assertEqual(config.notes_root, workspace_resolved / "notes" / "cs-61a")
+        self.assertEqual(config.course_id, "ece-364")
+        self.assertEqual(config.course_root, course_root.resolve())
+        self.assertEqual(config.project_root, (course_root / PROJECT_REL_PATH).resolve())
+        self.assertEqual(config.notes_root, (course_root / "notes").resolve())
 
         self.assertTrue((config.project_root / "project.yaml").exists())
         self.assertTrue((config.project_root / "state" / "session.json").exists())
@@ -38,34 +38,28 @@ class ProjectServiceTests(unittest.TestCase):
         self.assertTrue(config.notes_root.is_dir())
 
         stored = json.loads((config.project_root / "project.yaml").read_text(encoding="utf-8"))
-        self.assertEqual(stored["workspace_root"], str(workspace_resolved))
+        self.assertEqual(stored["course_root"], str(config.course_root))
         self.assertEqual(stored["project_root"], str(config.project_root))
         self.assertEqual(stored["notes_root"], str(config.notes_root))
+        self.assertNotIn("workspace_root", stored)
 
-    def test_create_project_allows_explicit_roots(self) -> None:
-        workspace_root = self.tmp_path / "workspace"
-        explicit_project_root = self.tmp_path / "custom" / "project-root"
-        explicit_notes_root = self.tmp_path / "custom" / "notes-root"
+    def test_create_project_defaults_course_id_from_course_root_name(self) -> None:
+        course_root = self.tmp_path / "Signal Processing 2026"
+        config = self.service.create_project(CreateProjectRequest(course_root=course_root))
+        self.assertEqual(config.course_id, "signal-processing-2026")
 
-        config = self.service.create_project(
-            CreateProjectRequest(
-                course_id="machine-learning",
-                workspace_root=workspace_root,
-                project_root=explicit_project_root,
-                notes_root=explicit_notes_root,
-            )
-        )
+    def test_load_project_by_course_root(self) -> None:
+        course_root = self.tmp_path / "course-a"
+        created = self.service.create_project(CreateProjectRequest(course_root=course_root, course_id="course-a"))
 
-        self.assertEqual(config.project_root, explicit_project_root.resolve())
-        self.assertEqual(config.notes_root, explicit_notes_root.resolve())
-        self.assertTrue((config.project_root / "project.yaml").exists())
-        self.assertTrue(config.notes_root.exists())
+        loaded = self.service.load_project_by_course_root(course_root)
+        self.assertEqual(loaded.project_root, created.project_root)
+        self.assertEqual(loaded.notes_root, created.notes_root)
+        self.assertEqual(loaded.course_root, created.course_root)
 
     def test_update_project_config(self) -> None:
-        workspace_root = self.tmp_path / "workspace"
-        config = self.service.create_project(
-            CreateProjectRequest(course_id="nlp-101", workspace_root=workspace_root)
-        )
+        course_root = self.tmp_path / "nlp-101"
+        config = self.service.create_project(CreateProjectRequest(course_root=course_root, course_id="nlp-101"))
 
         updated = self.service.update_project_config(
             config.project_root,
@@ -79,18 +73,9 @@ class ProjectServiceTests(unittest.TestCase):
         self.assertEqual(loaded.review_granularity, "section")
         self.assertTrue(loaded.pause_after_each_round)
 
-    def test_discover_workspace_projects(self) -> None:
-        workspace_root = self.tmp_path / "workspace"
-        self.service.create_project(CreateProjectRequest(course_id="course-a", workspace_root=workspace_root))
-        self.service.create_project(CreateProjectRequest(course_id="course-b", workspace_root=workspace_root))
-
-        discovered = self.service.discover_workspace_projects(workspace_root)
-        discovered_ids = [item.course_id for item in discovered]
-        self.assertEqual(discovered_ids, ["course-a", "course-b"])
-
     def test_allow_existing_does_not_reset_state_files(self) -> None:
-        workspace_root = self.tmp_path / "workspace"
-        config = self.service.create_project(CreateProjectRequest(course_id="course-a", workspace_root=workspace_root))
+        course_root = self.tmp_path / "course-a"
+        config = self.service.create_project(CreateProjectRequest(course_root=course_root, course_id="course-a"))
 
         session_path = config.project_root / "state" / "session.json"
         round_status_path = config.project_root / "state" / "round_status.json"
@@ -112,7 +97,7 @@ class ProjectServiceTests(unittest.TestCase):
         round_status_path.write_text(json.dumps(round_status_payload, ensure_ascii=False) + "\n", encoding="utf-8")
 
         self.service.create_project(
-            CreateProjectRequest(course_id="course-a", workspace_root=workspace_root),
+            CreateProjectRequest(course_root=course_root, course_id="course-a"),
             allow_existing=True,
         )
 
@@ -120,22 +105,12 @@ class ProjectServiceTests(unittest.TestCase):
         self.assertEqual(json.loads(round_status_path.read_text(encoding="utf-8")), round_status_payload)
 
     def test_load_project_config_invalid_json_raises_value_error(self) -> None:
-        workspace_root = self.tmp_path / "workspace"
-        config = self.service.create_project(CreateProjectRequest(course_id="course-a", workspace_root=workspace_root))
+        course_root = self.tmp_path / "course-a"
+        config = self.service.create_project(CreateProjectRequest(course_root=course_root, course_id="course-a"))
         (config.project_root / "project.yaml").write_text("{invalid-json\n", encoding="utf-8")
 
         with self.assertRaisesRegex(ValueError, "invalid project config"):
             self.service.load_project_config(config.project_root)
-
-    def test_discover_workspace_projects_skips_invalid_project_yaml(self) -> None:
-        workspace_root = self.tmp_path / "workspace"
-        valid = self.service.create_project(CreateProjectRequest(course_id="course-a", workspace_root=workspace_root))
-        invalid_root = workspace_root / "projects" / "broken"
-        invalid_root.mkdir(parents=True, exist_ok=True)
-        (invalid_root / "project.yaml").write_text("{invalid-json\n", encoding="utf-8")
-
-        discovered = self.service.discover_workspace_projects(workspace_root)
-        self.assertEqual([item.course_id for item in discovered], [valid.course_id])
 
 
 if __name__ == "__main__":

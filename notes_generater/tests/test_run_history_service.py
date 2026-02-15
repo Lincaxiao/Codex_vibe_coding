@@ -16,7 +16,7 @@ class RunHistoryServiceTests(unittest.TestCase):
         self.tmp_path = Path(self._tmp_dir.name)
         self.project_service = ProjectService()
         self.config = self.project_service.create_project(
-            CreateProjectRequest(course_id="history-test", workspace_root=self.tmp_path / "workspace")
+            CreateProjectRequest(course_id="history-test", course_root=self.tmp_path / "workspace")
         )
         self.service = RunHistoryService()
 

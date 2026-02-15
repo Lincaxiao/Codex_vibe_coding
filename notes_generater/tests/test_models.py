@@ -8,7 +8,7 @@ from notes_agent.models import ProjectConfig
 class ProjectConfigModelTests(unittest.TestCase):
     def test_from_dict_parses_pause_after_each_round_string(self) -> None:
         payload = {
-            "workspace_root": None,
+            "course_root": "/tmp/course",
             "course_id": "c1",
             "project_root": "/tmp/project",
             "notes_root": "/tmp/notes",
@@ -25,7 +25,7 @@ class ProjectConfigModelTests(unittest.TestCase):
 
     def test_from_dict_parses_pause_after_each_round_true_string(self) -> None:
         payload = {
-            "workspace_root": None,
+            "course_root": "/tmp/course",
             "course_id": "c1",
             "project_root": "/tmp/project",
             "notes_root": "/tmp/notes",

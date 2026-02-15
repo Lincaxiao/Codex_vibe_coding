@@ -21,7 +21,7 @@ class Round0AndCheckTests(unittest.TestCase):
         self.round0_initializer = Round0Initializer()
         self.check_runner = CheckRunner()
         config = self.project_service.create_project(
-            CreateProjectRequest(course_id="round0-test", workspace_root=self.tmp_path / "workspace")
+            CreateProjectRequest(course_id="round0-test", course_root=self.tmp_path / "workspace")
         )
         self.project_root = config.project_root
         self.notes_root = config.notes_root

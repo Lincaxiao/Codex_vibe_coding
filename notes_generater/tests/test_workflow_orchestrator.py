@@ -8,6 +8,7 @@ from typing import Callable
 
 from notes_agent.check_runner import CheckRunResult, CheckRunner
 from notes_agent.codex_executor import CodexRunRequest, CodexRunResult
+from notes_agent.lecture_registry_service import LectureRegistryService
 from notes_agent.models import CreateProjectRequest
 from notes_agent.project_service import ProjectService
 from notes_agent.run_history_service import RunHistoryService
@@ -120,8 +121,18 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self._tmp_dir = TemporaryDirectory()
         self.tmp_path = Path(self._tmp_dir.name)
         self.project_service = ProjectService()
+        self.course_root = self.tmp_path / "course"
         self.config = self.project_service.create_project(
-            CreateProjectRequest(course_id="workflow-test", workspace_root=self.tmp_path / "workspace")
+            CreateProjectRequest(course_id="workflow-test", course_root=self.course_root)
+        )
+        self.lecture_source_dir = self.course_root / "materials" / "LEC01"
+        self.lecture_source_dir.mkdir(parents=True, exist_ok=True)
+        (self.lecture_source_dir / "slides.md").write_text("lec01 slides\n", encoding="utf-8")
+        self.lecture_registry_service = LectureRegistryService()
+        self.lecture_registry_service.upsert_lecture(
+            project_root=self.config.project_root,
+            lec_id="LEC01",
+            paths=[self.lecture_source_dir],
         )
 
     def tearDown(self) -> None:
@@ -592,14 +603,12 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             round0_initializer=Round0Initializer(),
         )
         custom_templates = {
-            "round1": "ROUND1 CUSTOM {{lecture_scope}} {{target_lecture_dir}}",
+            "round1": "ROUND1 CUSTOM {{lecture_scope}} {{lecture_paths}}",
             "repair": "REPAIR CUSTOM {{check_errors}} {{check_warnings}}",
         }
         template_path = self.config.project_root / "artifacts" / "prompt_templates.json"
         template_path.parent.mkdir(parents=True, exist_ok=True)
         template_path.write_text(json.dumps(custom_templates, ensure_ascii=False) + "\n", encoding="utf-8")
-        lecture_dir = (self.tmp_path / "ECE364" / "LEC01").resolve()
-        lecture_dir.mkdir(parents=True, exist_ok=True)
 
         result = orchestrator.run(
             project_root=self.config.project_root,
@@ -607,17 +616,16 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             to_round="round1",
             workflow_run_id="wf_custom_prompt",
             target_lectures=["LEC01"],
-            target_lecture_dir=lecture_dir,
         )
 
         self.assertEqual(result.status, "succeeded")
         self.assertEqual(len(fake_executor.calls), 2)
         self.assertIn("ROUND1 CUSTOM LEC01", fake_executor.calls[0].prompt)
-        self.assertIn(str(lecture_dir), fake_executor.calls[0].prompt)
+        self.assertIn(str(self.lecture_source_dir), fake_executor.calls[0].prompt)
         self.assertIn("REPAIR CUSTOM", fake_executor.calls[1].prompt)
         self.assertIn("mock check failed", fake_executor.calls[1].prompt)
 
-    def test_target_lecture_dir_propagates_to_prompt_and_codex_access(self) -> None:
+    def test_target_lecture_scope_propagates_to_prompt_and_codex_access(self) -> None:
         fake_executor = FakeCodexExecutor(default_success=True)
         orchestrator = WorkflowOrchestrator(
             project_service=self.project_service,
@@ -625,8 +633,6 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
             round0_initializer=Round0Initializer(),
         )
-        lecture_dir = (self.tmp_path / "ECE364" / "LEC01").resolve()
-        lecture_dir.mkdir(parents=True, exist_ok=True)
 
         result = orchestrator.run(
             project_root=self.config.project_root,
@@ -634,31 +640,82 @@ class WorkflowOrchestratorTests(unittest.TestCase):
             to_round="round1",
             workflow_run_id="wf_target_dir",
             target_lectures=["LEC01"],
-            target_lecture_dir=lecture_dir,
         )
 
         self.assertEqual(result.status, "succeeded")
         self.assertEqual(len(fake_executor.calls), 1)
         request = fake_executor.calls[0]
-        self.assertIn(str(lecture_dir), request.prompt)
-        self.assertEqual(request.extra_allowed_dirs, [lecture_dir])
+        self.assertIn(str(self.lecture_source_dir), request.prompt)
+        self.assertEqual(
+            [path.resolve() for path in (request.extra_allowed_dirs or [])],
+            [self.lecture_source_dir.resolve()],
+        )
 
-    def test_target_lecture_dir_must_exist(self) -> None:
+    def test_workflow_without_target_uses_all_registered_lectures(self) -> None:
+        extra_dir = self.course_root / "materials" / "LEC02"
+        extra_dir.mkdir(parents=True, exist_ok=True)
+        (extra_dir / "notes.txt").write_text("lec02\n", encoding="utf-8")
+        self.lecture_registry_service.upsert_lecture(
+            project_root=self.config.project_root,
+            lec_id="LEC02",
+            paths=[extra_dir],
+        )
+
+        fake_executor = FakeCodexExecutor(default_success=True)
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            workflow_run_id="wf_all_lectures",
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        prompt = fake_executor.calls[0].prompt
+        self.assertIn("LEC01", prompt)
+        self.assertIn("LEC02", prompt)
+        self.assertIn(str(self.lecture_source_dir), prompt)
+        self.assertIn(str(extra_dir), prompt)
+
+    def test_unknown_target_lecture_rejected(self) -> None:
         orchestrator = WorkflowOrchestrator(
             project_service=self.project_service,
             codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
             check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
             round0_initializer=Round0Initializer(),
         )
-        missing_dir = self.tmp_path / "missing_lec_dir"
 
-        with self.assertRaisesRegex(ValueError, "目标讲次目录不存在"):
+        with self.assertRaisesRegex(ValueError, "目标讲次未注册"):
             orchestrator.run(
                 project_root=self.config.project_root,
                 from_round="round1",
                 to_round="round1",
                 workflow_run_id="wf_target_dir_missing",
-                target_lecture_dir=missing_dir,
+                target_lectures=["LEC404"],
+            )
+
+    def test_workflow_rejects_when_lecture_registry_empty(self) -> None:
+        self.lecture_registry_service.remove_lecture(
+            project_root=self.config.project_root,
+            lec_id="LEC01",
+        )
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        with self.assertRaisesRegex(ValueError, "未配置可用讲次"):
+            orchestrator.run(
+                project_root=self.config.project_root,
+                from_round="round1",
+                to_round="round1",
+                workflow_run_id="wf_missing_registry",
             )
 
 

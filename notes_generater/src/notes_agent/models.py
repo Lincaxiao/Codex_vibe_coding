@@ -23,10 +23,8 @@ def _as_bool(value: Any, default: bool = False) -> bool:
 
 @dataclass(frozen=True)
 class CreateProjectRequest:
-    course_id: str
-    workspace_root: Path | None = None
-    project_root: Path | None = None
-    notes_root: Path | None = None
+    course_root: Path
+    course_id: str | None = None
     review_granularity: ReviewGranularity = "lecture"
     language: str = "zh-CN"
     human_review_timing: str = "final_only"
@@ -38,7 +36,7 @@ class CreateProjectRequest:
 
 @dataclass(frozen=True)
 class ProjectConfig:
-    workspace_root: Path | None
+    course_root: Path
     course_id: str
     project_root: Path
     notes_root: Path
@@ -52,7 +50,7 @@ class ProjectConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "workspace_root": str(self.workspace_root) if self.workspace_root else None,
+            "course_root": str(self.course_root),
             "course_id": self.course_id,
             "project_root": str(self.project_root),
             "notes_root": str(self.notes_root),
@@ -67,10 +65,9 @@ class ProjectConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ProjectConfig:
-        workspace_root_raw = data.get("workspace_root")
-        workspace_root = Path(workspace_root_raw) if workspace_root_raw else None
+        course_root = Path(str(data["course_root"]))
         return cls(
-            workspace_root=workspace_root,
+            course_root=course_root,
             course_id=str(data["course_id"]),
             project_root=Path(data["project_root"]),
             notes_root=Path(data["notes_root"]),

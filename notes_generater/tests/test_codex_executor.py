@@ -19,7 +19,7 @@ class CodexExecutorTests(unittest.TestCase):
         self.tmp_path = Path(self._tmp_dir.name)
         project_service = ProjectService()
         config = project_service.create_project(
-            CreateProjectRequest(course_id="executor-test", workspace_root=self.tmp_path / "workspace")
+            CreateProjectRequest(course_id="executor-test", course_root=self.tmp_path / "workspace")
         )
         self.project_root = config.project_root
         self.notes_root = config.notes_root

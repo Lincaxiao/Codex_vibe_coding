@@ -10,6 +10,7 @@ from typing import Any, Callable, Literal
 from .check_runner import CheckRunResult, CheckRunner
 from .codex_executor import CodexExecutor, CodexRunRequest, CodexRunResult
 from .diff_service import DiffService, DiffSummary
+from .lecture_registry_service import LectureRegistryService
 from .path_utils import validate_path_component
 from .prompt_template_service import PromptTemplateService
 from .project_service import ProjectService
@@ -94,6 +95,7 @@ class WorkflowOrchestrator:
         diff_service: DiffService | None = None,
         snapshot_service: SnapshotService | None = None,
         prompt_template_service: PromptTemplateService | None = None,
+        lecture_registry_service: LectureRegistryService | None = None,
     ) -> None:
         self.project_service = project_service or ProjectService()
         self.codex_executor = codex_executor or CodexExecutor()
@@ -102,6 +104,7 @@ class WorkflowOrchestrator:
         self.diff_service = diff_service or DiffService()
         self.snapshot_service = snapshot_service or SnapshotService()
         self.prompt_template_service = prompt_template_service or PromptTemplateService()
+        self.lecture_registry_service = lecture_registry_service or LectureRegistryService()
 
     def run(
         self,
@@ -111,7 +114,6 @@ class WorkflowOrchestrator:
         to_round: RoundName = "final",
         notes_root: Path | str | None = None,
         target_lectures: list[str] | None = None,
-        target_lecture_dir: Path | str | None = None,
         allow_external_refs: bool = False,
         search_enabled: bool = False,
         max_retries: int = 2,
@@ -126,18 +128,22 @@ class WorkflowOrchestrator:
         root = Path(project_root).expanduser().resolve()
         config = self.project_service.load_project_config(root)
         notes = Path(notes_root).expanduser().resolve() if notes_root else config.notes_root
-        lecture_dir = self._resolve_target_lecture_dir(target_lecture_dir)
+        workflow_id = (
+            validate_path_component(workflow_run_id, field_name="workflow_run_id")
+            if workflow_run_id is not None
+            else _default_workflow_run_id()
+        )
+        lecture_scope = self.lecture_registry_service.resolve_paths(
+            project_root=root,
+            target_lectures=target_lectures or [],
+        )
+        extra_allowed_dirs = self._collect_extra_allowed_dirs(lecture_scope)
         prompt_templates = self.prompt_template_service.load_templates(project_root=root)
         if max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {max_retries}")
         pause_after_round = config.pause_after_each_round if pause_after_each_round is None else pause_after_each_round
         changed_lines_limit = config.max_changed_lines if max_changed_lines is None else max_changed_lines
         changed_files_limit = config.max_changed_files if max_changed_files is None else max_changed_files
-        workflow_id = (
-            validate_path_component(workflow_run_id, field_name="workflow_run_id")
-            if workflow_run_id is not None
-            else _default_workflow_run_id()
-        )
         workflow_dir = root / "runs" / workflow_id
         workflow_dir.mkdir(parents=True, exist_ok=False)
 
@@ -148,8 +154,10 @@ class WorkflowOrchestrator:
             progress_callback,
             f"[workflow] 启动 workflow_id={workflow_id}，执行轮次：{from_round}->{to_round} ({', '.join(rounds)})",
         )
-        if lecture_dir is not None:
-            self._emit_progress(progress_callback, f"[workflow] 目标讲次目录：{lecture_dir}")
+        self._emit_progress(
+            progress_callback,
+            f"[workflow] 目标讲次：{', '.join(lecture_scope.keys())}",
+        )
 
         session_path = root / "state" / "session.json"
         round_status_path = root / "state" / "round_status.json"
@@ -173,6 +181,15 @@ class WorkflowOrchestrator:
                 before_state = self.diff_service.capture_state(notes_root=notes)
                 round_artifact_dir = workflow_dir / round_name
                 round_artifact_dir.mkdir(parents=True, exist_ok=True)
+                self._write_json(
+                    round_artifact_dir / "lecture_scope.json",
+                    {
+                        "lectures": {
+                            lec_id: [str(path) for path in paths]
+                            for lec_id, paths in lecture_scope.items()
+                        }
+                    },
+                )
 
                 if round_name == "round0":
                     self._emit_progress(round_progress, "初始化笔记骨架")
@@ -289,8 +306,7 @@ class WorkflowOrchestrator:
                 prompt = self._build_round_prompt(
                     round_name=round_name,
                     notes_root=notes,
-                    target_lectures=target_lectures or [],
-                    target_lecture_dir=lecture_dir,
+                    lecture_scope=lecture_scope,
                     allow_external_refs=allow_external_refs,
                     template_text=prompt_templates.get(round_name),
                 )
@@ -312,7 +328,7 @@ class WorkflowOrchestrator:
                         run_id=codex_run_id,
                         search_enabled=round_search_enabled,
                         max_retries=max_retries,
-                        extra_allowed_dirs=[lecture_dir] if lecture_dir is not None else [],
+                        extra_allowed_dirs=extra_allowed_dirs,
                     ),
                     progress_callback=round_progress,
                 )
@@ -347,7 +363,7 @@ class WorkflowOrchestrator:
                                 run_id=repair_run_id,
                                 search_enabled=round_search_enabled,
                                 max_retries=max_retries,
-                                extra_allowed_dirs=[lecture_dir] if lecture_dir is not None else [],
+                                extra_allowed_dirs=extra_allowed_dirs,
                             ),
                             progress_callback=round_progress,
                         )
@@ -549,7 +565,6 @@ class WorkflowOrchestrator:
         to_round: RoundName = "final",
         notes_root: Path | str | None = None,
         target_lectures: list[str] | None = None,
-        target_lecture_dir: Path | str | None = None,
         allow_external_refs: bool = False,
         search_enabled: bool = False,
         max_retries: int = 2,
@@ -608,7 +623,6 @@ class WorkflowOrchestrator:
             to_round=to_round,
             notes_root=notes_root,
             target_lectures=target_lectures,
-            target_lecture_dir=target_lecture_dir,
             allow_external_refs=allow_external_refs,
             search_enabled=search_enabled,
             max_retries=max_retries,
@@ -654,13 +668,15 @@ class WorkflowOrchestrator:
         *,
         round_name: RoundName,
         notes_root: Path,
-        target_lectures: list[str],
-        target_lecture_dir: Path | None,
+        lecture_scope: dict[str, list[Path]],
         allow_external_refs: bool,
         template_text: str | None,
     ) -> str:
-        lecture_scope = ", ".join(target_lectures) if target_lectures else "all lectures"
-        lecture_dir_rule = str(target_lecture_dir) if target_lecture_dir is not None else "未指定"
+        lecture_scope_text = ", ".join(lecture_scope.keys())
+        lecture_paths_text = "\n".join(
+            f"- {lec_id}: {', '.join(str(path) for path in paths)}"
+            for lec_id, paths in lecture_scope.items()
+        )
         external_rule = (
             "Final 轮允许扩展阅读，但仍需以本地课程材料为主。"
             if allow_external_refs and round_name == "final"
@@ -670,9 +686,9 @@ class WorkflowOrchestrator:
             template_text=template_text,
             values={
                 "round_name": round_name,
-                "lecture_scope": lecture_scope,
+                "lecture_scope": lecture_scope_text,
+                "lecture_paths": lecture_paths_text,
                 "notes_root": str(notes_root),
-                "target_lecture_dir": lecture_dir_rule,
                 "external_rule": external_rule,
             },
         )
@@ -751,18 +767,18 @@ class WorkflowOrchestrator:
     ) -> bool:
         return search_enabled and allow_external_refs and round_name == "final"
 
-    def _resolve_target_lecture_dir(self, target_lecture_dir: Path | str | None) -> Path | None:
-        if target_lecture_dir is None:
-            return None
-        raw = str(target_lecture_dir).strip()
-        if not raw:
-            return None
-        resolved = Path(raw).expanduser().resolve()
-        if not resolved.exists():
-            raise ValueError(f"目标讲次目录不存在: {resolved}")
-        if not resolved.is_dir():
-            raise ValueError(f"目标讲次目录不是文件夹: {resolved}")
-        return resolved
+    def _collect_extra_allowed_dirs(self, lecture_scope: dict[str, list[Path]]) -> list[Path]:
+        normalized: list[Path] = []
+        seen: set[str] = set()
+        for paths in lecture_scope.values():
+            for path in paths:
+                resolved = path if path.is_dir() else path.parent
+                key = str(resolved)
+                if key in seen:
+                    continue
+                seen.add(key)
+                normalized.append(resolved)
+        return normalized
 
     def _verify_snapshot_integrity_if_present(self, *, project_root: Path) -> str | None:
         source_hashes_path = project_root / "artifacts" / "source_hashes.json"

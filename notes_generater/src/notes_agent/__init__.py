@@ -3,6 +3,7 @@ from .codex_executor import CodexExecutor, CodexRunRequest, CodexRunResult
 from .diff_service import DiffService, DiffSummary
 from .feedback_service import FeedbackAppendResult, FeedbackService
 from .gui_settings import GuiSettings, default_settings_path, load_gui_settings, save_gui_settings
+from .lecture_registry_service import LectureEntry, LectureRegistryService
 from .models import CreateProjectRequest, ProjectConfig
 from .project_service import ProjectService, slugify_course_id
 from .run_history_service import RunHistoryService, RunRecord
@@ -22,6 +23,8 @@ __all__ = [
     "FeedbackAppendResult",
     "FeedbackService",
     "GuiSettings",
+    "LectureEntry",
+    "LectureRegistryService",
     "ProjectConfig",
     "ProjectService",
     "RunHistoryService",

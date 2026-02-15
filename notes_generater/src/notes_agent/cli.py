@@ -10,6 +10,7 @@ from typing import Any, Callable
 from .check_runner import CheckRunner
 from .codex_executor import CodexExecutor, CodexRunRequest
 from .feedback_service import FeedbackService
+from .lecture_registry_service import LectureRegistryService
 from .models import CreateProjectRequest
 from .path_utils import validate_path_component
 from .project_service import ProjectService
@@ -59,10 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     create_parser = subparsers.add_parser("create-project", help="Create a course project scaffold")
-    create_parser.add_argument("--course-id", required=True, help="Unique course identifier")
-    create_parser.add_argument("--workspace-root", type=Path, help="Workspace root containing projects/ and notes/")
-    create_parser.add_argument("--project-root", type=Path, help="Explicit project_root override")
-    create_parser.add_argument("--notes-root", type=Path, help="Explicit notes_root override")
+    create_parser.add_argument("--course-root", required=True, type=Path, help="Course root directory")
+    create_parser.add_argument("--course-id", help="Optional course id override; defaults to course-root name")
     create_parser.add_argument(
         "--review-granularity",
         choices=["section", "lecture"],
@@ -73,9 +72,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     show_parser = subparsers.add_parser("show-project", help="Show a project config")
     show_parser.add_argument("--project-root", required=True, type=Path)
-
-    list_parser = subparsers.add_parser("list-projects", help="List projects under a workspace")
-    list_parser.add_argument("--workspace-root", required=True, type=Path)
 
     snapshot_parser = subparsers.add_parser("snapshot-sources", help="Copy sources into read-only snapshot")
     snapshot_parser.add_argument("--project-root", required=True, type=Path)
@@ -261,6 +257,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run id under project_root/runs",
     )
     show_patch_parser.add_argument("--round-name", help="Optional round name for workflow runs")
+
+    upsert_lecture_parser = subparsers.add_parser(
+        "upsert-lecture",
+        help="Create or update lecture mapping for a project",
+    )
+    upsert_lecture_parser.add_argument("--project-root", required=True, type=Path)
+    upsert_lecture_parser.add_argument("--lec-id", required=True, type=_path_component_arg("lec_id"))
+    upsert_lecture_parser.add_argument(
+        "--path",
+        dest="paths",
+        action="append",
+        required=True,
+        type=Path,
+        help="Lecture source path (repeatable)",
+    )
+
+    remove_lecture_parser = subparsers.add_parser(
+        "remove-lecture",
+        help="Remove lecture mapping by lec_id",
+    )
+    remove_lecture_parser.add_argument("--project-root", required=True, type=Path)
+    remove_lecture_parser.add_argument("--lec-id", required=True, type=_path_component_arg("lec_id"))
+
+    list_lectures_parser = subparsers.add_parser(
+        "list-lectures",
+        help="List lecture mappings for a project",
+    )
+    list_lectures_parser.add_argument("--project-root", required=True, type=Path)
     return parser
 
 
@@ -274,6 +298,7 @@ def main() -> int:
     check_runner = CheckRunner()
     feedback_service = FeedbackService()
     run_history_service = RunHistoryService()
+    lecture_registry_service = LectureRegistryService()
     workflow_orchestrator = WorkflowOrchestrator(
         project_service=service,
         codex_executor=codex_executor,
@@ -283,10 +308,8 @@ def main() -> int:
 
     if args.command == "create-project":
         request = CreateProjectRequest(
+            course_root=args.course_root,
             course_id=args.course_id,
-            workspace_root=args.workspace_root,
-            project_root=args.project_root,
-            notes_root=args.notes_root,
             review_granularity=args.review_granularity,
         )
         config = service.create_project(request, allow_existing=args.allow_existing)
@@ -296,11 +319,6 @@ def main() -> int:
     if args.command == "show-project":
         config = service.load_project_config(args.project_root)
         print(json.dumps(config.to_dict(), indent=2, ensure_ascii=False))
-        return 0
-
-    if args.command == "list-projects":
-        configs = service.discover_workspace_projects(args.workspace_root)
-        print(json.dumps([config.to_dict() for config in configs], indent=2, ensure_ascii=False))
         return 0
 
     if args.command == "snapshot-sources":
@@ -481,6 +499,32 @@ def main() -> int:
             print("")
             return 1
         print(patch)
+        return 0
+
+    if args.command == "upsert-lecture":
+        try:
+            entry = lecture_registry_service.upsert_lecture(
+                project_root=args.project_root,
+                lec_id=args.lec_id,
+                paths=args.paths,
+            )
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
+            return 2
+        print(json.dumps(entry.to_dict(), indent=2, ensure_ascii=False))
+        return 0
+
+    if args.command == "remove-lecture":
+        removed = lecture_registry_service.remove_lecture(
+            project_root=args.project_root,
+            lec_id=args.lec_id,
+        )
+        print(json.dumps({"removed": removed, "lec_id": args.lec_id}, indent=2, ensure_ascii=False))
+        return 0 if removed else 1
+
+    if args.command == "list-lectures":
+        entries = lecture_registry_service.list_lectures(project_root=args.project_root)
+        print(json.dumps([item.to_dict() for item in entries], indent=2, ensure_ascii=False))
         return 0
 
     parser.error(f"unsupported command: {args.command}")
