@@ -239,6 +239,65 @@ class CodexExecutorTests(unittest.TestCase):
         assert result.error is not None
         self.assertIn("failed to launch codex", result.error)
 
+    def test_probe_cli_reports_unavailable_when_codex_missing(self) -> None:
+        with mock.patch(
+            "notes_agent.codex_executor.subprocess.run",
+            side_effect=FileNotFoundError("codex not found"),
+        ):
+            payload = self.executor.probe_cli()
+        self.assertFalse(payload["available"])
+        self.assertIn("unavailable", payload["error"])
+
+    def test_run_cancelled_before_attempt(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append(cmd)
+            if cmd[:2] == ["codex", "--version"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="codex-cli 0.100.0\n", stderr="")
+            raise AssertionError("exec should not be called when cancelled before attempt")
+
+        with mock.patch("notes_agent.codex_executor.subprocess.run", side_effect=fake_run):
+            result = self.executor.run(
+                CodexRunRequest(
+                    project_root=self.project_root,
+                    notes_root=self.notes_root,
+                    prompt="取消测试",
+                    run_id="run_cancel_before",
+                    max_retries=1,
+                ),
+                cancel_check=lambda: True,
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.exit_code, 130)
+        self.assertEqual(result.attempts, 1)
+        self.assertTrue(any(cmd[:2] == ["codex", "--version"] for cmd in calls))
+
+    def test_run_cancelled_during_exec(self) -> None:
+        with mock.patch(
+            "notes_agent.codex_executor.subprocess.run",
+            return_value=subprocess.CompletedProcess(["codex", "--version"], 0, stdout="codex-cli 0.100.0\n", stderr=""),
+        ), mock.patch.object(
+            CodexExecutor,
+            "_run_exec_with_cancel",
+            return_value=(130, "cancelled by user", False, True, None),
+        ):
+            result = self.executor.run(
+                CodexRunRequest(
+                    project_root=self.project_root,
+                    notes_root=self.notes_root,
+                    prompt="取消测试",
+                    run_id="run_cancel_during",
+                    max_retries=0,
+                ),
+                cancel_check=lambda: False,
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.exit_code, 130)
+        self.assertEqual(result.error, "cancelled by user")
+
     def test_run_emits_progress_messages(self) -> None:
         def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
             if cmd[:2] == ["codex", "--version"]:

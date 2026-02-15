@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import traceback
 from dataclasses import replace
 from datetime import datetime
@@ -74,13 +75,14 @@ def main() -> int:
         failed = Signal(str)
         progress = Signal(str)
 
-        def __init__(self, fn: Callable[[Callable[[str], None]], Any]) -> None:
+        def __init__(self, fn: Callable[[Callable[[str], None], Callable[[], bool]], Any]) -> None:
             super().__init__()
             self._fn = fn
+            self._cancel_event = threading.Event()
 
         def run(self) -> None:
             try:
-                result = self._fn(self._emit_progress)
+                result = self._fn(self._emit_progress, self.is_cancelled)
                 self.finished.emit(result)
             except Exception as exc:
                 if isinstance(exc, ValueError):
@@ -90,6 +92,12 @@ def main() -> int:
 
         def _emit_progress(self, message: str) -> None:
             self.progress.emit(message)
+
+        def cancel(self) -> None:
+            self._cancel_event.set()
+
+        def is_cancelled(self) -> bool:
+            return self._cancel_event.is_set()
 
     class MainWindow(QMainWindow):  # type: ignore[misc]
         def __init__(self) -> None:
@@ -120,6 +128,9 @@ def main() -> int:
             self.nav_buttons: list[QPushButton] = []
             self.prompt_editors: dict[str, QPlainTextEdit] = {}
             self.lecture_entries: dict[str, list[str]] = {}
+            self._task_queue: list[tuple[str, Callable[[Callable[[str], None], Callable[[], bool]], Any]]] = []
+            self._active_worker: TaskWorker | None = None
+            self._active_thread: QThread | None = None
 
             self._build_ui()
             self._apply_theme()
@@ -316,14 +327,19 @@ def main() -> int:
             self.search_check = QCheckBox("启用网页搜索")
             self.allow_external_refs_check = QCheckBox("允许外部参考（Final）")
 
-            init_round0_btn = QPushButton("初始化第 0 轮")
-            init_round0_btn.clicked.connect(self._on_init_round0)
-            run_workflow_btn = QPushButton("执行流程")
-            run_workflow_btn.clicked.connect(self._on_run_workflow)
-            resume_workflow_btn = QPushButton("恢复流程")
-            resume_workflow_btn.clicked.connect(self._on_resume_workflow)
-            run_check_btn = QPushButton("执行检查")
-            run_check_btn.clicked.connect(self._on_run_check)
+            self.init_round0_btn = QPushButton("初始化第 0 轮")
+            self.init_round0_btn.clicked.connect(self._on_init_round0)
+            self.run_workflow_btn = QPushButton("执行流程")
+            self.run_workflow_btn.clicked.connect(self._on_run_workflow)
+            self.resume_workflow_btn = QPushButton("恢复流程")
+            self.resume_workflow_btn.clicked.connect(self._on_resume_workflow)
+            self.run_check_btn = QPushButton("执行检查")
+            self.run_check_btn.clicked.connect(self._on_run_check)
+            self.preflight_btn = QPushButton("执行前检查")
+            self.preflight_btn.clicked.connect(self._on_preflight_workflow)
+            self.cancel_task_btn = QPushButton("取消当前任务")
+            self.cancel_task_btn.clicked.connect(self._on_cancel_task)
+            self.cancel_task_btn.setEnabled(False)
 
             grid.addWidget(QLabel("起始轮次"), 0, 0)
             grid.addWidget(self.from_round_combo, 0, 1)
@@ -338,10 +354,12 @@ def main() -> int:
             grid.addWidget(self.pause_each_round_check, 3, 0, 1, 2)
             grid.addWidget(self.search_check, 3, 2)
             grid.addWidget(self.allow_external_refs_check, 3, 3)
-            grid.addWidget(init_round0_btn, 4, 0)
-            grid.addWidget(run_workflow_btn, 4, 1)
-            grid.addWidget(run_check_btn, 4, 2)
-            grid.addWidget(resume_workflow_btn, 4, 3)
+            grid.addWidget(self.init_round0_btn, 4, 0)
+            grid.addWidget(self.run_workflow_btn, 4, 1)
+            grid.addWidget(self.run_check_btn, 4, 2)
+            grid.addWidget(self.resume_workflow_btn, 4, 3)
+            grid.addWidget(self.preflight_btn, 5, 0, 1, 2)
+            grid.addWidget(self.cancel_task_btn, 5, 2, 1, 2)
             layout.addLayout(grid)
             layout.addStretch(1)
             return page
@@ -821,27 +839,38 @@ def main() -> int:
             if not config:
                 return
 
-            def task(progress: Callable[[str], None]) -> dict[str, Any]:
+            def task(progress: Callable[[str], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
+                if cancel_check():
+                    return {"status": "cancelled", "message": "任务已在开始前取消"}
                 progress("[round0] 开始初始化")
                 init_result = self.round0_initializer.initialize(
                     project_root=config.project_root,
                     notes_root=config.notes_root,
                     course_id=config.course_id,
                 )
+                if cancel_check():
+                    return {
+                        "status": "cancelled",
+                        "message": "初始化完成后收到取消请求，已停止后续检查",
+                        "init": init_result.to_dict(),
+                    }
                 progress("[round0] 初始化完成，开始检查")
                 check_result = self.check_runner.run(
                     project_root=config.project_root,
                     notes_root=config.notes_root,
                     progress_callback=progress,
+                    cancel_check=cancel_check,
                 )
                 return {"init": init_result.to_dict(), "check": check_result.to_dict()}
 
             self._run_task("初始化第 0 轮", task)
 
-        def _on_run_workflow(self) -> None:
-            config = self._require_config()
-            if not config:
-                return
+        def _collect_workflow_options(
+            self,
+            config: ProjectConfig,
+            *,
+            auto_enable_external_refs: bool,
+        ) -> dict[str, Any]:
             from_round = self.from_round_combo.currentText()
             to_round = self.to_round_combo.currentText()
             target = self.target_lecture_combo.currentText().strip()
@@ -850,25 +879,65 @@ def main() -> int:
             search_enabled = self.search_check.isChecked()
             pause_each_round = self.pause_each_round_check.isChecked()
             allow_external_refs = self.allow_external_refs_check.isChecked()
-            if search_enabled and not allow_external_refs:
+            if auto_enable_external_refs and search_enabled and not allow_external_refs:
                 allow_external_refs = True
                 self.allow_external_refs_check.setChecked(True)
                 self._log("已自动启用“允许外部参考（Final）”：网页搜索仅在该选项开启时生效，请注意外部信息风险。")
+            return {
+                "from_round": from_round,
+                "to_round": to_round,
+                "target_lectures": [target] if target else [],
+                "max_changed_lines": max_lines,
+                "max_changed_files": max_files,
+                "search_enabled": search_enabled,
+                "pause_after_each_round": pause_each_round,
+                "allow_external_refs": allow_external_refs,
+            }
 
-            def task(progress: Callable[[str], None]) -> dict[str, Any]:
+        def _on_preflight_workflow(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+            options = self._collect_workflow_options(config, auto_enable_external_refs=False)
+
+            def task(progress: Callable[[str], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
+                if cancel_check():
+                    return {"status": "cancelled", "message": "任务已在开始前取消"}
+                return self.workflow_orchestrator.preflight(
+                    project_root=config.project_root,
+                    notes_root=config.notes_root,
+                    from_round=options["from_round"],
+                    to_round=options["to_round"],
+                    target_lectures=options["target_lectures"],
+                    allow_external_refs=options["allow_external_refs"],
+                    search_enabled=options["search_enabled"],
+                    progress_callback=progress,
+                )
+
+            self._save_settings()
+            self._run_task("执行前检查", task)
+
+        def _on_run_workflow(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+            options = self._collect_workflow_options(config, auto_enable_external_refs=True)
+
+            def task(progress: Callable[[str], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
                 result = self.workflow_orchestrator.run(
                     project_root=config.project_root,
                     notes_root=config.notes_root,
-                    from_round=from_round,  # type: ignore[arg-type]
-                    to_round=to_round,  # type: ignore[arg-type]
-                    target_lectures=[target] if target else [],
-                    allow_external_refs=allow_external_refs,
-                    search_enabled=search_enabled,
+                    from_round=options["from_round"],  # type: ignore[arg-type]
+                    to_round=options["to_round"],  # type: ignore[arg-type]
+                    target_lectures=options["target_lectures"],
+                    allow_external_refs=options["allow_external_refs"],
+                    search_enabled=options["search_enabled"],
                     max_retries=0,
-                    pause_after_each_round=pause_each_round,
-                    max_changed_lines=max_lines,
-                    max_changed_files=max_files,
+                    pause_after_each_round=options["pause_after_each_round"],
+                    max_changed_lines=options["max_changed_lines"],
+                    max_changed_files=options["max_changed_files"],
                     progress_callback=progress,
+                    cancel_check=cancel_check,
                 )
                 return result.to_dict()
 
@@ -878,37 +947,28 @@ def main() -> int:
                 self._error(f"保存提示词失败: {exc}")
                 return
             self._save_settings()
-            self._run_task(f"执行流程 {from_round}->{to_round}", task)
+            self._run_task(f"执行流程 {options['from_round']}->{options['to_round']}", task)
 
         def _on_resume_workflow(self) -> None:
             config = self._require_config()
             if not config:
                 return
-            to_round = self.to_round_combo.currentText()
-            target = self.target_lecture_combo.currentText().strip()
-            max_lines = _safe_int(self.max_lines_edit.text().strip(), config.max_changed_lines)
-            max_files = _safe_int(self.max_files_edit.text().strip(), config.max_changed_files)
-            search_enabled = self.search_check.isChecked()
-            pause_each_round = self.pause_each_round_check.isChecked()
-            allow_external_refs = self.allow_external_refs_check.isChecked()
-            if search_enabled and not allow_external_refs:
-                allow_external_refs = True
-                self.allow_external_refs_check.setChecked(True)
-                self._log("已自动启用“允许外部参考（Final）”：网页搜索仅在该选项开启时生效，请注意外部信息风险。")
+            options = self._collect_workflow_options(config, auto_enable_external_refs=True)
 
-            def task(progress: Callable[[str], None]) -> dict[str, Any]:
+            def task(progress: Callable[[str], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
                 result = self.workflow_orchestrator.resume(
                     project_root=config.project_root,
                     notes_root=config.notes_root,
-                    to_round=to_round,  # type: ignore[arg-type]
-                    target_lectures=[target] if target else [],
-                    allow_external_refs=allow_external_refs,
-                    search_enabled=search_enabled,
+                    to_round=options["to_round"],  # type: ignore[arg-type]
+                    target_lectures=options["target_lectures"],
+                    allow_external_refs=options["allow_external_refs"],
+                    search_enabled=options["search_enabled"],
                     max_retries=0,
-                    pause_after_each_round=pause_each_round,
-                    max_changed_lines=max_lines,
-                    max_changed_files=max_files,
+                    pause_after_each_round=options["pause_after_each_round"],
+                    max_changed_lines=options["max_changed_lines"],
+                    max_changed_files=options["max_changed_files"],
                     progress_callback=progress,
+                    cancel_check=cancel_check,
                 )
                 return result.to_dict()
 
@@ -918,18 +978,19 @@ def main() -> int:
                 self._error(f"保存提示词失败: {exc}")
                 return
             self._save_settings()
-            self._run_task(f"恢复流程 -> {to_round}", task)
+            self._run_task(f"恢复流程 -> {options['to_round']}", task)
 
         def _on_run_check(self) -> None:
             config = self._require_config()
             if not config:
                 return
 
-            def task(progress: Callable[[str], None]) -> dict[str, Any]:
+            def task(progress: Callable[[str], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
                 return self.check_runner.run(
                     project_root=config.project_root,
                     notes_root=config.notes_root,
                     progress_callback=progress,
+                    cancel_check=cancel_check,
                 ).to_dict()
 
             self._run_task("执行检查", task)
@@ -1021,7 +1082,7 @@ def main() -> int:
             config = self._require_config()
             if not config:
                 return
-            if self._threads:
+            if self._active_thread is not None or self._task_queue:
                 self._error("当前有任务运行中，请先等待完成后再清理缓存")
                 return
 
@@ -1038,7 +1099,7 @@ def main() -> int:
             if confirm != QMessageBox.Yes:
                 return
 
-            def task(progress: Callable[[str], None]) -> dict[str, Any]:
+            def task(progress: Callable[[str], None], _: Callable[[], bool]) -> dict[str, Any]:
                 result = self.cache_service.clear_intermediate_files(
                     project_root=config.project_root,
                     preserve_prompt_templates=True,
@@ -1048,15 +1109,40 @@ def main() -> int:
 
             self._run_task("清除中间缓存", task)
 
-        def _run_task(self, title: str, fn: Callable[[Callable[[str], None]], Any]) -> None:
-            if self._threads:
-                self._error("当前已有任务运行中，请等待当前任务完成后再启动新任务")
+        def _on_cancel_task(self) -> None:
+            if self._active_worker is None:
+                self._error("当前没有运行中的任务可取消")
                 return
+            if self._active_worker.is_cancelled():
+                self._log("取消请求已发送，等待当前步骤结束")
+                return
+            self._active_worker.cancel()
+            self._log("已发送取消请求，正在等待当前步骤安全中断")
+
+        def _run_task(
+            self,
+            title: str,
+            fn: Callable[[Callable[[str], None], Callable[[], bool]], Any],
+        ) -> None:
+            if self._active_thread is not None:
+                self._task_queue.append((title, fn))
+                self._log(f"任务已加入队列（第 {len(self._task_queue)} 个待执行）：{title}")
+                self._sync_task_controls()
+                return
+            self._start_task(title, fn)
+
+        def _start_task(
+            self,
+            title: str,
+            fn: Callable[[Callable[[str], None], Callable[[], bool]], Any],
+        ) -> None:
             self._set_status(f"执行中: {title}", running=True)
             worker = TaskWorker(fn)
             thread = QThread(self)
             worker.moveToThread(thread)
             thread.started.connect(worker.run)
+            self._active_worker = worker
+            self._active_thread = thread
 
             def on_finished(result: Any) -> None:
                 self._set_status("空闲", running=False)
@@ -1079,9 +1165,32 @@ def main() -> int:
             thread.finished.connect(worker.deleteLater)
             thread.finished.connect(lambda: self._threads.remove(thread) if thread in self._threads else None)
             thread.finished.connect(lambda: self._workers.remove(worker) if worker in self._workers else None)
+            thread.finished.connect(lambda: self._on_task_finished(thread, worker))
             self._threads.append(thread)
             self._workers.append(worker)
+            self._sync_task_controls()
             thread.start()
+
+        def _on_task_finished(self, thread: QThread, worker: TaskWorker) -> None:
+            if self._active_thread is thread:
+                self._active_thread = None
+            if self._active_worker is worker:
+                self._active_worker = None
+            self._sync_task_controls()
+            self._start_next_task_if_any()
+
+        def _start_next_task_if_any(self) -> None:
+            if self._active_thread is not None:
+                return
+            if not self._task_queue:
+                return
+            title, fn = self._task_queue.pop(0)
+            self._log(f"开始执行队列任务：{title}")
+            self._start_task(title, fn)
+
+        def _sync_task_controls(self) -> None:
+            running = self._active_thread is not None
+            self.cancel_task_btn.setEnabled(running)
 
         def _log(self, message: str) -> None:
             self.output.appendPlainText(f"[{_now_time()}] {message}")

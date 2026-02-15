@@ -139,6 +139,27 @@ class Round0AndCheckTests(unittest.TestCase):
         self.assertTrue(any("[check] 开始执行检查脚本" in item for item in messages))
         self.assertTrue(any("[check] 执行完成：passed=True" in item for item in messages))
 
+    def test_check_runner_can_be_cancelled(self) -> None:
+        self.round0_initializer.initialize(
+            project_root=self.project_root,
+            notes_root=self.notes_root,
+            course_id="round0-test",
+        )
+        with mock.patch.object(
+            CheckRunner,
+            "_run_with_cancel",
+            return_value=(130, "", "cancelled by user", False, True),
+        ):
+            result = self.check_runner.run(
+                project_root=self.project_root,
+                notes_root=self.notes_root,
+                cancel_check=lambda: False,
+            )
+        self.assertFalse(result.passed)
+        self.assertEqual(result.exit_code, 130)
+        self.assertIsNone(result.payload)
+        self.assertIn("cancelled by user", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

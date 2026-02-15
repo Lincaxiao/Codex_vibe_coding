@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+import time
 
 DEFAULT_CHECK_TIMEOUT_SECONDS = 5 * 60
 
@@ -51,6 +52,7 @@ class CheckRunner:
         notes_root: Path | str,
         output_path: Path | str | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> CheckRunResult:
         project = Path(project_root).expanduser().resolve()
         notes = Path(notes_root).expanduser().resolve()
@@ -64,17 +66,25 @@ class CheckRunner:
         )
         started_at = _now_iso()
         timed_out = False
+        cancelled = False
         try:
-            completed = subprocess.run(
-                [str(check_script), str(project)],
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=self.timeout_seconds,
-            )
-            exit_code = completed.returncode
-            stdout = completed.stdout
-            stderr = completed.stderr
+            if cancel_check is None:
+                completed = subprocess.run(
+                    [str(check_script), str(project)],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=self.timeout_seconds,
+                )
+                exit_code = completed.returncode
+                stdout = completed.stdout
+                stderr = completed.stderr
+            else:
+                exit_code, stdout, stderr, timed_out, cancelled = self._run_with_cancel(
+                    cmd=[str(check_script), str(project)],
+                    timeout_seconds=self.timeout_seconds,
+                    cancel_check=cancel_check,
+                )
         except subprocess.TimeoutExpired as exc:
             timed_out = True
             exit_code = 124
@@ -83,9 +93,11 @@ class CheckRunner:
             timeout_error = f"check script timed out after {self.timeout_seconds}s"
             stderr = f"{stderr}\n{timeout_error}".strip()
             self._emit_progress(progress_callback, f"[check] 执行超时（>{self.timeout_seconds}s）")
+        if cancelled:
+            self._emit_progress(progress_callback, "[check] 已取消")
         finished_at = _now_iso()
 
-        payload = self._parse_json_payload(stdout) if not timed_out else None
+        payload = self._parse_json_payload(stdout) if not timed_out and not cancelled else None
         result = CheckRunResult(
             passed=exit_code == 0,
             exit_code=exit_code,
@@ -105,6 +117,59 @@ class CheckRunner:
             self._write_json(Path(output_path), result.to_dict())
             self._emit_progress(progress_callback, f"[check] 结果已写入：{Path(output_path)}")
         return result
+
+    def _run_with_cancel(
+        self,
+        *,
+        cmd: list[str],
+        timeout_seconds: int,
+        cancel_check: Callable[[], bool],
+    ) -> tuple[int, str, str, bool, bool]:
+        process = subprocess.Popen(
+            cmd,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        deadline = time.monotonic() + timeout_seconds
+        timed_out = False
+        cancelled = False
+        while True:
+            if cancel_check():
+                cancelled = True
+                self._terminate_process(process)
+                break
+            if process.poll() is not None:
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                self._terminate_process(process)
+                break
+            time.sleep(0.1)
+
+        try:
+            stdout, stderr = process.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+
+        if timed_out:
+            timeout_error = f"check script timed out after {timeout_seconds}s"
+            stderr = f"{stderr}\n{timeout_error}".strip()
+            return (124, stdout or "", stderr or "", True, False)
+        if cancelled:
+            stderr = f"{stderr}\ncancelled by user".strip()
+            return (130, stdout or "", stderr or "", False, True)
+        return (process.returncode or 0, stdout or "", stderr or "", False, False)
+
+    def _terminate_process(self, process: subprocess.Popen[str]) -> None:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
 
     def _parse_json_payload(self, stdout: str) -> dict[str, Any] | None:
         text = stdout.strip()

@@ -761,6 +761,26 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 workflow_run_id="wf_missing_registry",
             )
 
+    def test_workflow_can_be_cancelled_before_round_start(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True)
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            workflow_run_id="wf_cancelled_before_start",
+            cancel_check=lambda: True,
+        )
+        self.assertEqual(result.status, "paused")
+        self.assertEqual(result.rounds, [])
+        round_status = json.loads((self.config.project_root / "state" / "round_status.json").read_text(encoding="utf-8"))
+        self.assertEqual(round_status["round1"], "pending")
+
     def test_preflight_round0_only_passes_without_lecture_registry(self) -> None:
         self.lecture_registry_service.remove_lecture(
             project_root=self.config.project_root,

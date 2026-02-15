@@ -88,6 +88,7 @@ class CodexExecutor:
         request: CodexRunRequest,
         *,
         progress_callback: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> CodexRunResult:
         if request.max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {request.max_retries}")
@@ -127,6 +128,20 @@ class CodexExecutor:
         combined_stdout_log: list[str] = []
 
         for attempt in range(1, request.max_retries + 2):
+            if cancel_check is not None and cancel_check():
+                final_exit_code = 130
+                final_error = "cancelled by user"
+                attempts_log.append(
+                    {
+                        "attempt": attempt,
+                        "started_at": _now_iso(),
+                        "ended_at": _now_iso(),
+                        "exit_code": 130,
+                        "retry_reason": "cancelled",
+                    }
+                )
+                self._emit_progress(progress_callback, f"[codex] attempt {attempt} 已取消")
+                break
             started_at = _now_iso()
             self._emit_progress(
                 progress_callback,
@@ -142,22 +157,31 @@ class CodexExecutor:
             timed_out = False
             timeout_error = f"codex exec timed out after {self.exec_timeout_seconds}s"
             launch_error: str | None = None
+            cancelled = False
             heartbeat = self._start_attempt_heartbeat(
                 progress_callback=progress_callback,
                 attempt=attempt,
                 total_attempts=request.max_retries + 1,
             )
             try:
-                completed = subprocess.run(
-                    command,
-                    cwd=project_root,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=self.exec_timeout_seconds,
-                )
-                exit_code = completed.returncode
-                stdio = self._merge_stdio(completed.stdout, completed.stderr)
+                if cancel_check is None:
+                    completed = subprocess.run(
+                        command,
+                        cwd=project_root,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                        timeout=self.exec_timeout_seconds,
+                    )
+                    exit_code = completed.returncode
+                    stdio = self._merge_stdio(completed.stdout, completed.stderr)
+                else:
+                    exit_code, stdio, timed_out, cancelled, launch_error = self._run_exec_with_cancel(
+                        command=command,
+                        cwd=project_root,
+                        timeout_seconds=self.exec_timeout_seconds,
+                        cancel_check=cancel_check,
+                    )
             except subprocess.TimeoutExpired as exc:
                 timed_out = True
                 exit_code = 124
@@ -192,6 +216,12 @@ class CodexExecutor:
                     "retry_reason": None,
                 }
             )
+
+            if cancelled:
+                final_error = "cancelled by user"
+                attempts_log[-1]["retry_reason"] = "cancelled"
+                self._emit_progress(progress_callback, f"[codex] attempt {attempt} 已取消")
+                break
 
             if exit_code == 0:
                 final_error = None
@@ -255,6 +285,20 @@ class CodexExecutor:
             run_manifest_path=run_manifest_path,
             error=final_error,
         )
+
+    def probe_cli(self) -> dict[str, Any]:
+        version = self._read_codex_version()
+        if version.startswith("unknown"):
+            return {
+                "available": False,
+                "version": version,
+                "error": "codex CLI unavailable",
+            }
+        return {
+            "available": True,
+            "version": version,
+            "error": None,
+        }
 
     def _emit_progress(
         self,
@@ -333,6 +377,64 @@ class CodexExecutor:
             command.append("--search")
         command.append(request.prompt)
         return command
+
+    def _run_exec_with_cancel(
+        self,
+        *,
+        command: list[str],
+        cwd: Path,
+        timeout_seconds: int,
+        cancel_check: Callable[[], bool],
+    ) -> tuple[int, str, bool, bool, str | None]:
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=cwd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except OSError as exc:
+            return (127, f"failed to launch codex: {exc}", False, False, f"failed to launch codex: {exc}")
+
+        deadline = time.monotonic() + timeout_seconds
+        timed_out = False
+        cancelled = False
+        while True:
+            if cancel_check():
+                cancelled = True
+                self._terminate_process(process)
+                break
+            if process.poll() is not None:
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                self._terminate_process(process)
+                break
+            time.sleep(0.1)
+
+        try:
+            stdout, stderr = process.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+        stdio = self._merge_stdio(stdout or "", stderr or "")
+        if timed_out:
+            stdio = f"{stdio}\ncodex exec timed out after {timeout_seconds}s".strip()
+            return (124, stdio, True, False, None)
+        if cancelled:
+            stdio = f"{stdio}\ncancelled by user".strip()
+            return (130, stdio, False, True, None)
+        return (process.returncode or 0, stdio, False, False, None)
+
+    def _terminate_process(self, process: subprocess.Popen[str]) -> None:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
 
     def _normalize_extra_allowed_dirs(
         self,
