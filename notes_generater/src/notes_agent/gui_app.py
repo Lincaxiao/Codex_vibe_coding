@@ -103,6 +103,7 @@ def main() -> int:
             )
             self.current_config: ProjectConfig | None = None
             self._threads: list[QThread] = []
+            self._workers: list[TaskWorker] = []
             self.settings = load_gui_settings()
             self.nav_buttons: list[QPushButton] = []
 
@@ -756,7 +757,9 @@ def main() -> int:
             thread.finished.connect(thread.deleteLater)
             thread.finished.connect(worker.deleteLater)
             thread.finished.connect(lambda: self._threads.remove(thread) if thread in self._threads else None)
+            thread.finished.connect(lambda: self._workers.remove(worker) if worker in self._workers else None)
             self._threads.append(thread)
+            self._workers.append(worker)
             thread.start()
 
         def _log(self, message: str) -> None:
