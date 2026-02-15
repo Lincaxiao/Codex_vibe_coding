@@ -17,6 +17,17 @@ npm install
 npm run dev
 ```
 
+`npm run dev` 会直接启动 Electron 桌面窗口并启用前端热更新。
+日常调试 GUI 不需要每次打包成 dmg。
+
+如果你只想快速看当前构建效果（不打包）：
+
+```bash
+cd prompt_vault
+npm run build
+npm start
+```
+
 ## Test
 
 ```bash
