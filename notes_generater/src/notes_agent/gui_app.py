@@ -262,8 +262,10 @@ def main() -> int:
             self.lecture_paths_input = QPlainTextEdit()
             self.lecture_paths_input.setPlaceholderText("每行一个资料路径（目录或文件）")
 
-            browse_path_btn = QPushButton("添加路径")
-            browse_path_btn.clicked.connect(self._on_add_lecture_path)
+            browse_dir_btn = QPushButton("添加目录")
+            browse_dir_btn.clicked.connect(self._on_add_lecture_path)
+            browse_file_btn = QPushButton("添加文件")
+            browse_file_btn.clicked.connect(self._on_add_lecture_file)
             save_lecture_btn = QPushButton("保存讲次映射")
             save_lecture_btn.clicked.connect(self._on_save_lecture_mapping)
             remove_lecture_btn = QPushButton("删除讲次")
@@ -277,10 +279,11 @@ def main() -> int:
             grid.addWidget(self.lecture_id_edit, 1, 1, 1, 2)
             grid.addWidget(QLabel("资料路径"), 2, 1)
             grid.addWidget(self.lecture_paths_input, 3, 1, 2, 2)
-            grid.addWidget(browse_path_btn, 5, 1)
-            grid.addWidget(save_lecture_btn, 5, 2)
-            grid.addWidget(remove_lecture_btn, 6, 1)
-            grid.addWidget(refresh_lecture_btn, 6, 2)
+            grid.addWidget(browse_dir_btn, 5, 1)
+            grid.addWidget(browse_file_btn, 5, 2)
+            grid.addWidget(save_lecture_btn, 6, 1)
+            grid.addWidget(remove_lecture_btn, 6, 2)
+            grid.addWidget(refresh_lecture_btn, 7, 1, 1, 2)
 
             layout.addLayout(grid)
             layout.addStretch(1)
@@ -736,6 +739,23 @@ def main() -> int:
                 return
             start = self.course_root_edit.text().strip() or str(config.course_root)
             selected = QFileDialog.getExistingDirectory(self, "选择讲次资料目录", start)
+            if not selected:
+                return
+            current_lines = [
+                line.strip()
+                for line in self.lecture_paths_input.toPlainText().splitlines()
+                if line.strip()
+            ]
+            if selected not in current_lines:
+                current_lines.append(selected)
+            self.lecture_paths_input.setPlainText("\n".join(current_lines))
+
+        def _on_add_lecture_file(self) -> None:
+            config = self._require_config()
+            if not config:
+                return
+            start = self.course_root_edit.text().strip() or str(config.course_root)
+            selected, _ = QFileDialog.getOpenFileName(self, "选择讲次资料文件", start)
             if not selected:
                 return
             current_lines = [
