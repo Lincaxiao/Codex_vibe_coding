@@ -32,6 +32,7 @@ class CodexRunRequest:
     model: str | None = None
     search_enabled: bool = False
     max_retries: int = 2
+    extra_allowed_dirs: list[Path] | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,11 @@ class CodexExecutor:
 
         project_root = request.project_root.expanduser().resolve()
         notes_root = request.notes_root.expanduser().resolve()
+        extra_dirs = self._normalize_extra_allowed_dirs(
+            request.extra_allowed_dirs,
+            project_root=project_root,
+            notes_root=notes_root,
+        )
         run_id = (
             validate_path_component(request.run_id, field_name="run_id")
             if request.run_id is not None
@@ -121,6 +127,7 @@ class CodexExecutor:
                 request=request,
                 project_root=project_root,
                 notes_root=notes_root,
+                extra_allowed_dirs=extra_dirs,
                 last_message_path=last_message_path,
             )
             timed_out = False
@@ -207,7 +214,7 @@ class CodexExecutor:
             "ask_for_approval_mode": "never",
             "search_enabled": request.search_enabled,
             "network_enabled": request.search_enabled,
-            "writable_dirs": [str(project_root), str(notes_root)],
+            "writable_dirs": [str(project_root), str(notes_root), *[str(path) for path in extra_dirs]],
             "max_retries": request.max_retries,
             "attempts": attempts_log,
             "final_exit_code": final_exit_code,
@@ -251,6 +258,7 @@ class CodexExecutor:
         request: CodexRunRequest,
         project_root: Path,
         notes_root: Path,
+        extra_allowed_dirs: list[Path],
         last_message_path: Path,
     ) -> list[str]:
         command = [
@@ -268,12 +276,34 @@ class CodexExecutor:
             "--output-last-message",
             str(last_message_path),
         ]
+        for path in extra_allowed_dirs:
+            command.extend(["--add-dir", str(path)])
         if request.model:
             command.extend(["--model", request.model])
         if request.search_enabled:
             command.append("--search")
         command.append(request.prompt)
         return command
+
+    def _normalize_extra_allowed_dirs(
+        self,
+        raw_paths: list[Path] | None,
+        *,
+        project_root: Path,
+        notes_root: Path,
+    ) -> list[Path]:
+        if not raw_paths:
+            return []
+        normalized: list[Path] = []
+        seen: set[str] = {str(project_root), str(notes_root)}
+        for raw in raw_paths:
+            path = Path(raw).expanduser().resolve()
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(path)
+        return normalized
 
     def _read_codex_version(self) -> str:
         try:

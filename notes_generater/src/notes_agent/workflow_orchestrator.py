@@ -108,6 +108,7 @@ class WorkflowOrchestrator:
         to_round: RoundName = "final",
         notes_root: Path | str | None = None,
         target_lectures: list[str] | None = None,
+        target_lecture_dir: Path | str | None = None,
         allow_external_refs: bool = False,
         search_enabled: bool = False,
         max_retries: int = 2,
@@ -122,6 +123,7 @@ class WorkflowOrchestrator:
         root = Path(project_root).expanduser().resolve()
         config = self.project_service.load_project_config(root)
         notes = Path(notes_root).expanduser().resolve() if notes_root else config.notes_root
+        lecture_dir = self._resolve_target_lecture_dir(target_lecture_dir)
         if max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {max_retries}")
         pause_after_round = config.pause_after_each_round if pause_after_each_round is None else pause_after_each_round
@@ -142,6 +144,8 @@ class WorkflowOrchestrator:
             progress_callback,
             f"[workflow] 启动 workflow_id={workflow_id}，执行轮次：{from_round}->{to_round} ({', '.join(rounds)})",
         )
+        if lecture_dir is not None:
+            self._emit_progress(progress_callback, f"[workflow] 目标讲次目录：{lecture_dir}")
 
         session_path = root / "state" / "session.json"
         round_status_path = root / "state" / "round_status.json"
@@ -282,6 +286,7 @@ class WorkflowOrchestrator:
                     round_name=round_name,
                     notes_root=notes,
                     target_lectures=target_lectures or [],
+                    target_lecture_dir=lecture_dir,
                     allow_external_refs=allow_external_refs,
                 )
                 codex_run_id = f"{workflow_id}_{round_name}"
@@ -302,6 +307,7 @@ class WorkflowOrchestrator:
                         run_id=codex_run_id,
                         search_enabled=round_search_enabled,
                         max_retries=max_retries,
+                        extra_allowed_dirs=[lecture_dir] if lecture_dir is not None else [],
                     ),
                     progress_callback=round_progress,
                 )
@@ -335,6 +341,7 @@ class WorkflowOrchestrator:
                                 run_id=repair_run_id,
                                 search_enabled=round_search_enabled,
                                 max_retries=max_retries,
+                                extra_allowed_dirs=[lecture_dir] if lecture_dir is not None else [],
                             ),
                             progress_callback=round_progress,
                         )
@@ -536,6 +543,7 @@ class WorkflowOrchestrator:
         to_round: RoundName = "final",
         notes_root: Path | str | None = None,
         target_lectures: list[str] | None = None,
+        target_lecture_dir: Path | str | None = None,
         allow_external_refs: bool = False,
         search_enabled: bool = False,
         max_retries: int = 2,
@@ -594,6 +602,7 @@ class WorkflowOrchestrator:
             to_round=to_round,
             notes_root=notes_root,
             target_lectures=target_lectures,
+            target_lecture_dir=target_lecture_dir,
             allow_external_refs=allow_external_refs,
             search_enabled=search_enabled,
             max_retries=max_retries,
@@ -640,9 +649,15 @@ class WorkflowOrchestrator:
         round_name: RoundName,
         notes_root: Path,
         target_lectures: list[str],
+        target_lecture_dir: Path | None,
         allow_external_refs: bool,
     ) -> str:
         lecture_scope = ", ".join(target_lectures) if target_lectures else "all lectures"
+        lecture_dir_rule = (
+            f"目标讲次资料目录：{target_lecture_dir}\n请优先读取该目录下与本轮目标讲次相关的资料。"
+            if target_lecture_dir is not None
+            else "目标讲次资料目录：未指定（可在允许范围内自行定位本地资料）。"
+        )
         external_rule = (
             "Final 轮允许扩展阅读，但必须单独分节并标注来源链接。"
             if allow_external_refs and round_name == "final"
@@ -660,6 +675,7 @@ class WorkflowOrchestrator:
             f"目标范围：{lecture_scope}\n"
             f"任务：{round_task}\n"
             f"工作目录中的 notes_root: {notes_root}\n"
+            f"{lecture_dir_rule}\n"
             f"{external_rule}\n"
             "全局要求：\n"
             "1. 全文中文解释（代码块和专有名词可保留英文）。\n"
@@ -734,6 +750,19 @@ class WorkflowOrchestrator:
         allow_external_refs: bool,
     ) -> bool:
         return search_enabled and allow_external_refs and round_name == "final"
+
+    def _resolve_target_lecture_dir(self, target_lecture_dir: Path | str | None) -> Path | None:
+        if target_lecture_dir is None:
+            return None
+        raw = str(target_lecture_dir).strip()
+        if not raw:
+            return None
+        resolved = Path(raw).expanduser().resolve()
+        if not resolved.exists():
+            raise ValueError(f"目标讲次目录不存在: {resolved}")
+        if not resolved.is_dir():
+            raise ValueError(f"目标讲次目录不是文件夹: {resolved}")
+        return resolved
 
     def _verify_snapshot_integrity_if_present(self, *, project_root: Path) -> str | None:
         source_hashes_path = project_root / "artifacts" / "source_hashes.json"

@@ -564,6 +564,50 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertTrue(any("[round1] 调用 Codex" in item for item in messages))
         self.assertTrue(any("[workflow] 结束，状态：succeeded" in item for item in messages))
 
+    def test_target_lecture_dir_propagates_to_prompt_and_codex_access(self) -> None:
+        fake_executor = FakeCodexExecutor(default_success=True)
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=fake_executor,  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        lecture_dir = (self.tmp_path / "ECE364" / "LEC01").resolve()
+        lecture_dir.mkdir(parents=True, exist_ok=True)
+
+        result = orchestrator.run(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            workflow_run_id="wf_target_dir",
+            target_lectures=["LEC01"],
+            target_lecture_dir=lecture_dir,
+        )
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(len(fake_executor.calls), 1)
+        request = fake_executor.calls[0]
+        self.assertIn(str(lecture_dir), request.prompt)
+        self.assertEqual(request.extra_allowed_dirs, [lecture_dir])
+
+    def test_target_lecture_dir_must_exist(self) -> None:
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        missing_dir = self.tmp_path / "missing_lec_dir"
+
+        with self.assertRaisesRegex(ValueError, "目标讲次目录不存在"):
+            orchestrator.run(
+                project_root=self.config.project_root,
+                from_round="round1",
+                to_round="round1",
+                workflow_run_id="wf_target_dir_missing",
+                target_lecture_dir=missing_dir,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

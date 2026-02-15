@@ -23,6 +23,7 @@ class GuiSettingsTests(unittest.TestCase):
                 workspace_root="/tmp/ws",
                 course_id="cs61a",
                 target_lecture="lecture01",
+                target_lecture_dir="/tmp/ws/course/LEC01",
                 from_round="round1",
                 to_round="round3",
                 max_changed_lines=300,

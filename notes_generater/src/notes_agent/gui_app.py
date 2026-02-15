@@ -228,7 +228,7 @@ def main() -> int:
             layout.setSpacing(12)
 
             heading = QLabel("流程控制", objectName="PageHeading")
-            hint = QLabel("执行轮次、从暂停点恢复，并设置安全阈值。", objectName="PageHint")
+            hint = QLabel("执行轮次、从暂停点恢复，并设置目标讲次与目录。", objectName="PageHint")
             layout.addWidget(heading)
             layout.addWidget(hint)
 
@@ -241,10 +241,13 @@ def main() -> int:
             self.to_round_combo = QComboBox()
             self.to_round_combo.addItems(ROUND_VALUES)
             self.target_lecture_edit = QLineEdit()
+            self.target_lecture_dir_edit = QLineEdit()
             self.max_lines_edit = QLineEdit()
             self.max_files_edit = QLineEdit()
             self.pause_each_round_check = QCheckBox("每轮后暂停")
             self.search_check = QCheckBox("启用网页搜索")
+            browse_target_dir_btn = QPushButton("选择讲次目录")
+            browse_target_dir_btn.clicked.connect(self._on_browse_target_lecture_dir)
 
             init_round0_btn = QPushButton("初始化第 0 轮")
             init_round0_btn.clicked.connect(self._on_init_round0)
@@ -261,16 +264,19 @@ def main() -> int:
             grid.addWidget(self.to_round_combo, 0, 3)
             grid.addWidget(QLabel("目标讲次"), 1, 0)
             grid.addWidget(self.target_lecture_edit, 1, 1, 1, 3)
-            grid.addWidget(QLabel("最大改动行数"), 2, 0)
-            grid.addWidget(self.max_lines_edit, 2, 1)
-            grid.addWidget(QLabel("最大改动文件数"), 2, 2)
-            grid.addWidget(self.max_files_edit, 2, 3)
-            grid.addWidget(self.pause_each_round_check, 3, 0, 1, 2)
-            grid.addWidget(self.search_check, 3, 2, 1, 2)
-            grid.addWidget(init_round0_btn, 4, 0)
-            grid.addWidget(run_workflow_btn, 4, 1)
-            grid.addWidget(run_check_btn, 4, 2)
-            grid.addWidget(resume_workflow_btn, 4, 3)
+            grid.addWidget(QLabel("讲次目录"), 2, 0)
+            grid.addWidget(self.target_lecture_dir_edit, 2, 1, 1, 2)
+            grid.addWidget(browse_target_dir_btn, 2, 3)
+            grid.addWidget(QLabel("最大改动行数"), 3, 0)
+            grid.addWidget(self.max_lines_edit, 3, 1)
+            grid.addWidget(QLabel("最大改动文件数"), 3, 2)
+            grid.addWidget(self.max_files_edit, 3, 3)
+            grid.addWidget(self.pause_each_round_check, 4, 0, 1, 2)
+            grid.addWidget(self.search_check, 4, 2, 1, 2)
+            grid.addWidget(init_round0_btn, 5, 0)
+            grid.addWidget(run_workflow_btn, 5, 1)
+            grid.addWidget(run_check_btn, 5, 2)
+            grid.addWidget(resume_workflow_btn, 5, 3)
             layout.addLayout(grid)
             layout.addStretch(1)
             return page
@@ -479,6 +485,7 @@ def main() -> int:
             self.workspace_edit.setText(self.settings.workspace_root)
             self.course_edit.setText(self.settings.course_id)
             self.target_lecture_edit.setText(self.settings.target_lecture)
+            self.target_lecture_dir_edit.setText(self.settings.target_lecture_dir)
             self._set_combo_value(self.from_round_combo, self.settings.from_round)
             self._set_combo_value(self.to_round_combo, self.settings.to_round)
             self.max_lines_edit.setText(str(self.settings.max_changed_lines))
@@ -492,6 +499,7 @@ def main() -> int:
                 workspace_root=self.workspace_edit.text().strip(),
                 course_id=self.course_edit.text().strip(),
                 target_lecture=self.target_lecture_edit.text().strip(),
+                target_lecture_dir=self.target_lecture_dir_edit.text().strip(),
                 from_round=self.from_round_combo.currentText(),
                 to_round=self.to_round_combo.currentText(),
                 max_changed_lines=_safe_int(self.max_lines_edit.text().strip(), 500),
@@ -522,6 +530,14 @@ def main() -> int:
             selected = QFileDialog.getExistingDirectory(self, "选择工作区目录")
             if selected:
                 self.workspace_edit.setText(selected)
+                self._save_settings()
+
+        def _on_browse_target_lecture_dir(self) -> None:
+            current = self.target_lecture_dir_edit.text().strip()
+            start = current or self.workspace_edit.text().strip()
+            selected = QFileDialog.getExistingDirectory(self, "选择目标讲次目录", start)
+            if selected:
+                self.target_lecture_dir_edit.setText(selected)
                 self._save_settings()
 
         def _on_create_or_load_project(self) -> None:
@@ -598,6 +614,7 @@ def main() -> int:
             from_round = self.from_round_combo.currentText()
             to_round = self.to_round_combo.currentText()
             target = self.target_lecture_edit.text().strip()
+            target_dir = self.target_lecture_dir_edit.text().strip()
             max_lines = _safe_int(self.max_lines_edit.text().strip(), config.max_changed_lines)
             max_files = _safe_int(self.max_files_edit.text().strip(), config.max_changed_files)
             search_enabled = self.search_check.isChecked()
@@ -610,6 +627,7 @@ def main() -> int:
                     from_round=from_round,  # type: ignore[arg-type]
                     to_round=to_round,  # type: ignore[arg-type]
                     target_lectures=[target] if target else [],
+                    target_lecture_dir=target_dir or None,
                     search_enabled=search_enabled,
                     pause_after_each_round=pause_each_round,
                     max_changed_lines=max_lines,
@@ -627,6 +645,7 @@ def main() -> int:
                 return
             to_round = self.to_round_combo.currentText()
             target = self.target_lecture_edit.text().strip()
+            target_dir = self.target_lecture_dir_edit.text().strip()
             max_lines = _safe_int(self.max_lines_edit.text().strip(), config.max_changed_lines)
             max_files = _safe_int(self.max_files_edit.text().strip(), config.max_changed_files)
             search_enabled = self.search_check.isChecked()
@@ -638,6 +657,7 @@ def main() -> int:
                     notes_root=config.notes_root,
                     to_round=to_round,  # type: ignore[arg-type]
                     target_lectures=[target] if target else [],
+                    target_lecture_dir=target_dir or None,
                     search_enabled=search_enabled,
                     pause_after_each_round=pause_each_round,
                     max_changed_lines=max_lines,

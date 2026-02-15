@@ -266,6 +266,38 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertTrue(any("attempt 1 成功" in item for item in messages))
         self.assertTrue(any("结束 success=True" in item for item in messages))
 
+    def test_run_includes_extra_allowed_dirs(self) -> None:
+        calls: list[list[str]] = []
+        extra_dir = self.tmp_path / "course_data" / "LEC01"
+        extra_dir.mkdir(parents=True, exist_ok=True)
+
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append(cmd)
+            if cmd[:2] == ["codex", "--version"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="codex-cli 0.100.0-alpha.10\n", stderr="")
+            if cmd[0] == "codex" and "exec" in cmd:
+                output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+                output_path.write_text("ok\n", encoding="utf-8")
+                return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        with mock.patch("notes_agent.codex_executor.subprocess.run", side_effect=fake_run):
+            result = self.executor.run(
+                CodexRunRequest(
+                    project_root=self.project_root,
+                    notes_root=self.notes_root,
+                    prompt="读取讲次目录",
+                    run_id="run_extra_dir",
+                    extra_allowed_dirs=[extra_dir],
+                )
+            )
+
+        self.assertTrue(result.success)
+        exec_command = next(cmd for cmd in calls if cmd[0] == "codex" and "exec" in cmd)
+        add_dir_values = [exec_command[idx + 1] for idx, token in enumerate(exec_command) if token == "--add-dir"]
+        self.assertIn(str(self.notes_root), add_dir_values)
+        self.assertIn(str(extra_dir.resolve()), add_dir_values)
+
 
 if __name__ == "__main__":
     unittest.main()

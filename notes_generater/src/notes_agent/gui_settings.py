@@ -35,6 +35,7 @@ class GuiSettings:
     workspace_root: str = ""
     course_id: str = ""
     target_lecture: str = ""
+    target_lecture_dir: str = ""
     from_round: str = "round0"
     to_round: str = "round1"
     max_changed_lines: int = 500
@@ -47,6 +48,7 @@ class GuiSettings:
             "workspace_root": self.workspace_root,
             "course_id": self.course_id,
             "target_lecture": self.target_lecture,
+            "target_lecture_dir": self.target_lecture_dir,
             "from_round": self.from_round,
             "to_round": self.to_round,
             "max_changed_lines": self.max_changed_lines,
@@ -61,6 +63,7 @@ class GuiSettings:
             workspace_root=str(payload.get("workspace_root", "")),
             course_id=str(payload.get("course_id", "")),
             target_lecture=str(payload.get("target_lecture", "")),
+            target_lecture_dir=str(payload.get("target_lecture_dir", "")),
             from_round=str(payload.get("from_round", "round0")),
             to_round=str(payload.get("to_round", "round1")),
             max_changed_lines=_as_int(payload.get("max_changed_lines", 500), 500),
