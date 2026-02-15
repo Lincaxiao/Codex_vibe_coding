@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .check_runner import CheckRunner
+from .codex_executor import CodexExecutor
 from .feedback_service import FeedbackService
 from .gui_settings import load_gui_settings, save_gui_settings
 from .models import CreateProjectRequest, ProjectConfig
@@ -96,8 +97,10 @@ def main() -> int:
             self.check_runner = CheckRunner()
             self.feedback_service = FeedbackService()
             self.run_history_service = RunHistoryService()
+            self.codex_executor = CodexExecutor(exec_timeout_seconds=10 * 60)
             self.workflow_orchestrator = WorkflowOrchestrator(
                 project_service=self.project_service,
+                codex_executor=self.codex_executor,
                 check_runner=self.check_runner,
                 round0_initializer=self.round0_initializer,
             )
@@ -630,6 +633,7 @@ def main() -> int:
                     target_lectures=[target] if target else [],
                     target_lecture_dir=target_dir or None,
                     search_enabled=search_enabled,
+                    max_retries=0,
                     pause_after_each_round=pause_each_round,
                     max_changed_lines=max_lines,
                     max_changed_files=max_files,
@@ -660,6 +664,7 @@ def main() -> int:
                     target_lectures=[target] if target else [],
                     target_lecture_dir=target_dir or None,
                     search_enabled=search_enabled,
+                    max_retries=0,
                     pause_after_each_round=pause_each_round,
                     max_changed_lines=max_lines,
                     max_changed_files=max_files,

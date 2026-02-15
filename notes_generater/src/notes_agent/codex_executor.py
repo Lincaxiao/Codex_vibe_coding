@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -69,13 +71,17 @@ class CodexExecutor:
         *,
         exec_timeout_seconds: int = DEFAULT_CODEX_EXEC_TIMEOUT_SECONDS,
         version_timeout_seconds: int = DEFAULT_CODEX_VERSION_TIMEOUT_SECONDS,
+        progress_interval_seconds: float = 10.0,
     ) -> None:
         if exec_timeout_seconds <= 0:
             raise ValueError(f"exec_timeout_seconds must be > 0, got {exec_timeout_seconds}")
         if version_timeout_seconds <= 0:
             raise ValueError(f"version_timeout_seconds must be > 0, got {version_timeout_seconds}")
+        if progress_interval_seconds <= 0:
+            raise ValueError(f"progress_interval_seconds must be > 0, got {progress_interval_seconds}")
         self.exec_timeout_seconds = exec_timeout_seconds
         self.version_timeout_seconds = version_timeout_seconds
+        self.progress_interval_seconds = progress_interval_seconds
 
     def run(
         self,
@@ -108,7 +114,10 @@ class CodexExecutor:
         prompt_path.write_text(request.prompt, encoding="utf-8")
         self._emit_progress(
             progress_callback,
-            f"[codex] 启动 run_id={run_id}，最多尝试 {request.max_retries + 1} 次",
+            (
+                f"[codex] 启动 run_id={run_id}，最多尝试 {request.max_retries + 1} 次 "
+                f"(单次超时 {self.exec_timeout_seconds}s，理论最长约 {(request.max_retries + 1) * self.exec_timeout_seconds}s)"
+            ),
         )
 
         codex_version = self._read_codex_version()
@@ -133,6 +142,11 @@ class CodexExecutor:
             timed_out = False
             timeout_error = f"codex exec timed out after {self.exec_timeout_seconds}s"
             launch_error: str | None = None
+            heartbeat = self._start_attempt_heartbeat(
+                progress_callback=progress_callback,
+                attempt=attempt,
+                total_attempts=request.max_retries + 1,
+            )
             try:
                 completed = subprocess.run(
                     command,
@@ -161,6 +175,8 @@ class CodexExecutor:
                 launch_error = f"failed to launch codex: {exc}"
                 stdio = launch_error
                 self._emit_progress(progress_callback, f"[codex] 启动失败：{exc}")
+            finally:
+                self._stop_attempt_heartbeat(heartbeat)
             ended_at = _now_iso()
             final_exit_code = exit_code
             combined_stdout_log.append(
@@ -251,6 +267,39 @@ class CodexExecutor:
             progress_callback(message)
         except Exception:
             return
+
+    def _start_attempt_heartbeat(
+        self,
+        *,
+        progress_callback: Callable[[str], None] | None,
+        attempt: int,
+        total_attempts: int,
+    ) -> tuple[threading.Event, threading.Thread] | None:
+        if progress_callback is None:
+            return None
+
+        stop_event = threading.Event()
+        started_at = time.monotonic()
+
+        def _heartbeat() -> None:
+            while not stop_event.wait(self.progress_interval_seconds):
+                elapsed = int(time.monotonic() - started_at)
+                remaining = max(self.exec_timeout_seconds - elapsed, 0)
+                self._emit_progress(
+                    progress_callback,
+                    f"[codex] attempt {attempt}/{total_attempts} 进行中，已等待 {elapsed}s，距超时剩余 {remaining}s",
+                )
+
+        thread = threading.Thread(target=_heartbeat, daemon=True)
+        thread.start()
+        return (stop_event, thread)
+
+    def _stop_attempt_heartbeat(self, heartbeat: tuple[threading.Event, threading.Thread] | None) -> None:
+        if heartbeat is None:
+            return
+        stop_event, thread = heartbeat
+        stop_event.set()
+        thread.join(timeout=0.2)
 
     def _build_command(
         self,

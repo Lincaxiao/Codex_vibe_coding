@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -297,6 +298,36 @@ class CodexExecutorTests(unittest.TestCase):
         add_dir_values = [exec_command[idx + 1] for idx, token in enumerate(exec_command) if token == "--add-dir"]
         self.assertIn(str(self.notes_root), add_dir_values)
         self.assertIn(str(extra_dir.resolve()), add_dir_values)
+
+    def test_run_emits_heartbeat_when_execution_is_slow(self) -> None:
+        executor = CodexExecutor(exec_timeout_seconds=30, progress_interval_seconds=0.01)
+
+        def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+            if cmd[:2] == ["codex", "--version"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="codex-cli 0.100.0-alpha.10\n", stderr="")
+            if cmd[0] == "codex" and "exec" in cmd:
+                time.sleep(0.05)
+                output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+                output_path.write_text("ok\n", encoding="utf-8")
+                return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        messages: list[str] = []
+        with mock.patch("notes_agent.codex_executor.subprocess.run", side_effect=fake_run):
+            result = executor.run(
+                CodexRunRequest(
+                    project_root=self.project_root,
+                    notes_root=self.notes_root,
+                    prompt="慢执行心跳",
+                    run_id="run_heartbeat",
+                    max_retries=0,
+                ),
+                progress_callback=messages.append,
+            )
+
+        self.assertTrue(result.success)
+        self.assertTrue(any("理论最长约 30s" in item for item in messages))
+        self.assertTrue(any("进行中，已等待" in item for item in messages))
 
 
 if __name__ == "__main__":
