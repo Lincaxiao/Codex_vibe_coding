@@ -1,5 +1,6 @@
 import { ulid } from "ulid";
 
+import { AppException } from "./appError";
 import { getDb } from "./db";
 
 export type PromptRecord = {
@@ -30,17 +31,26 @@ export type PromptUpsertInput = {
   tags: string[];
 };
 
+type PromptRow = {
+  id: string;
+  title: string;
+  body: string;
+  is_deleted: number;
+  created_at: string;
+  updated_at: string;
+};
+
 function normalizeTitle(value: string): string {
   const next = value.trim();
   if (!next) {
-    throw new Error("标题不能为空");
+    throw new AppException("VALIDATION_ERROR", "标题不能为空");
   }
   return next;
 }
 
 function normalizeBody(value: string): string {
   if (!value.trim()) {
-    throw new Error("正文不能为空");
+    throw new AppException("VALIDATION_ERROR", "正文不能为空");
   }
   return value;
 }
@@ -90,24 +100,43 @@ function refreshFtsRow(promptId: string): void {
   );
 }
 
-function mapPromptRow(row: {
-  id: string;
-  title: string;
-  body: string;
-  is_deleted: number;
-  created_at: string;
-  updated_at: string;
-}): PromptRecord {
-  const db = getDb();
-  const tags = db
-    .prepare("SELECT tag FROM prompt_tags WHERE prompt_id = ? ORDER BY tag ASC")
-    .all(row.id) as Array<{ tag: string }>;
+function getTagsByPromptIds(promptIds: string[]): Map<string, string[]> {
+  const mapping = new Map<string, string[]>();
+  if (promptIds.length === 0) {
+    return mapping;
+  }
 
+  const db = getDb();
+  const placeholders = promptIds.map(() => "?").join(", ");
+  const rows = db
+    .prepare(
+      `
+      SELECT prompt_id, tag
+      FROM prompt_tags
+      WHERE prompt_id IN (${placeholders})
+      ORDER BY prompt_id ASC, tag ASC
+      `
+    )
+    .all(...promptIds) as Array<{ prompt_id: string; tag: string }>;
+
+  for (const row of rows) {
+    const list = mapping.get(row.prompt_id);
+    if (list) {
+      list.push(row.tag);
+    } else {
+      mapping.set(row.prompt_id, [row.tag]);
+    }
+  }
+
+  return mapping;
+}
+
+function mapPromptRow(row: PromptRow, tagsByPromptId: Map<string, string[]>): PromptRecord {
   return {
     id: row.id,
     title: row.title,
     body: row.body,
-    tags: tags.map((item) => item.tag),
+    tags: tagsByPromptId.get(row.id) ?? [],
     isDeleted: row.is_deleted === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -134,7 +163,7 @@ function listFromRows(
     listParams.push(options.limit, options.offset ?? 0);
   }
 
-  const items = db
+  const rows = db
     .prepare(
       `
       SELECT p.id, p.title, p.body, p.is_deleted, p.created_at, p.updated_at
@@ -144,18 +173,13 @@ function listFromRows(
       ${limitSql}
       `
     )
-    .all(...listParams) as Array<{
-    id: string;
-    title: string;
-    body: string;
-    is_deleted: number;
-    created_at: string;
-    updated_at: string;
-  }>;
+    .all(...listParams) as PromptRow[];
+
+  const tagsByPromptId = getTagsByPromptIds(rows.map((row) => row.id));
 
   return {
     total: totalRow.total,
-    items: items.map(mapPromptRow),
+    items: rows.map((row) => mapPromptRow(row, tagsByPromptId)),
   };
 }
 
@@ -188,22 +212,15 @@ export function listAllPrompts(includeDeleted: boolean): PromptRecord[] {
 export function getPrompt(promptId: string): PromptRecord | null {
   const db = getDb();
   const row = db
-    .prepare(
-      "SELECT id, title, body, is_deleted, created_at, updated_at FROM prompts WHERE id = ?"
-    )
-    .get(promptId) as {
-    id: string;
-    title: string;
-    body: string;
-    is_deleted: number;
-    created_at: string;
-    updated_at: string;
-  } | undefined;
+    .prepare("SELECT id, title, body, is_deleted, created_at, updated_at FROM prompts WHERE id = ?")
+    .get(promptId) as PromptRow | undefined;
 
   if (!row) {
     return null;
   }
-  return mapPromptRow(row);
+
+  const tagsByPromptId = getTagsByPromptIds([row.id]);
+  return mapPromptRow(row, tagsByPromptId);
 }
 
 export function promptExistsByTitleBody(title: string, body: string): boolean {
@@ -245,7 +262,7 @@ export function updatePrompt(promptId: string, input: PromptUpsertInput): Prompt
   const db = getDb();
   const existing = getPrompt(promptId);
   if (!existing) {
-    throw new Error("提示词不存在");
+    throw new AppException("NOT_FOUND", "提示词不存在");
   }
 
   const title = normalizeTitle(input.title);
@@ -289,7 +306,7 @@ const PLACEHOLDER = /\{\{\s*([a-zA-Z0-9_-]+)\s*\}\}/g;
 export function renderPrompt(promptId: string, variables: Record<string, string>): string {
   const prompt = getPrompt(promptId);
   if (!prompt) {
-    throw new Error("提示词不存在");
+    throw new AppException("NOT_FOUND", "提示词不存在");
   }
   return prompt.body.replace(PLACEHOLDER, (_match, key: string) => {
     return Object.prototype.hasOwnProperty.call(variables, key) ? variables[key] : `{{${key}}}`;

@@ -69,40 +69,22 @@ export type PromptCopyOutput = {
   content: string;
 };
 
-export type ImportJsonInput = {
-  inputPath: string;
-};
-
 export type ImportJsonOutput = {
   added: number;
   skipped: number;
+  sourcePath: string;
 };
 
 export type ExportJsonInput = {
-  outputPath: string;
   includeDeleted: boolean;
 };
 
 export type ExportMarkdownInput = {
-  outputPath: string;
   includeDeleted: boolean;
 };
 
 export type ExportOutput = {
   outputPath: string;
-};
-
-export type PickImportFileOutput = {
-  path: string;
-};
-
-export type PickExportPathInput = {
-  format: "json" | "markdown";
-  defaultPath?: string;
-};
-
-export type PickExportPathOutput = {
-  path: string;
 };
 
 export type MenuCommand = "new" | "save" | "focus-search";
@@ -117,13 +99,9 @@ export type VaultApi = {
     softDelete: (promptId: string) => Promise<Result<PromptDeleteOutput>>;
     render: (input: PromptRenderInput) => Promise<Result<PromptRenderOutput>>;
     copyRendered: (input: PromptRenderInput) => Promise<Result<PromptCopyOutput>>;
-    importJson: (input: ImportJsonInput) => Promise<Result<ImportJsonOutput>>;
+    importJson: () => Promise<Result<ImportJsonOutput>>;
     exportJson: (input: ExportJsonInput) => Promise<Result<ExportOutput>>;
     exportMarkdown: (input: ExportMarkdownInput) => Promise<Result<ExportOutput>>;
-  };
-  dialog: {
-    pickImportFile: () => Promise<Result<PickImportFileOutput>>;
-    pickExportPath: (input: PickExportPathInput) => Promise<Result<PickExportPathOutput>>;
   };
   events: {
     onMenuCommand: (listener: (command: MenuCommand) => void) => () => void;

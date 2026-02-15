@@ -4,9 +4,7 @@ import type { IpcRendererEvent } from "electron";
 import type {
   ExportJsonInput,
   ExportMarkdownInput,
-  ImportJsonInput,
   MenuCommand,
-  PickExportPathInput,
   PromptListInput,
   PromptRenderInput,
   PromptUpsertInput,
@@ -29,13 +27,9 @@ const vaultApi: VaultApi = {
     softDelete: (promptId: string) => invoke("vault:prompt:softDelete", promptId),
     render: (input: PromptRenderInput) => invoke("vault:prompt:render", input),
     copyRendered: (input: PromptRenderInput) => invoke("vault:prompt:copyRendered", input),
-    importJson: (input: ImportJsonInput) => invoke("vault:prompt:importJson", input),
+    importJson: () => invoke("vault:prompt:importJson"),
     exportJson: (input: ExportJsonInput) => invoke("vault:prompt:exportJson", input),
     exportMarkdown: (input: ExportMarkdownInput) => invoke("vault:prompt:exportMarkdown", input),
-  },
-  dialog: {
-    pickImportFile: () => invoke("vault:dialog:pickImportFile"),
-    pickExportPath: (input: PickExportPathInput) => invoke("vault:dialog:pickExportPath", input),
   },
   events: {
     onMenuCommand: (listener: (command: MenuCommand) => void) => {

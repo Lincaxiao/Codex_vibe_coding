@@ -62,11 +62,9 @@ export default function App() {
   const [busy, setBusy] = useState(false);
 
   const [importModalOpen, setImportModalOpen] = useState(false);
-  const [importPath, setImportPath] = useState("");
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<"json" | "markdown">("json");
-  const [exportPath, setExportPath] = useState("prompt_vault_export.json");
   const [exportIncludeDeleted, setExportIncludeDeleted] = useState(false);
 
   const selectedMeta = useMemo(
@@ -266,24 +264,9 @@ export default function App() {
     notify("已复制渲染结果");
   }, [isCreating, notify, renderVars, selectedId]);
 
-  const onPickImportFile = useCallback(async () => {
-    const result = await window.vault.dialog.pickImportFile();
-    if (!result.ok) {
-      notify(result.error.message);
-      return;
-    }
-    setImportPath(result.data.path);
-  }, [notify]);
-
   const onConfirmImport = useCallback(async () => {
-    const path = importPath.trim();
-    if (!path) {
-      notify("导入路径不能为空");
-      return;
-    }
-
     setBusy(true);
-    const result = await window.vault.prompt.importJson({ inputPath: path });
+    const result = await window.vault.prompt.importJson();
     setBusy(false);
     if (!result.ok) {
       notify(result.error.message);
@@ -291,35 +274,18 @@ export default function App() {
     }
 
     setImportModalOpen(false);
-    notify(`导入完成：新增 ${result.data.added}，跳过 ${result.data.skipped}`);
+    notify(
+      `导入完成：新增 ${result.data.added}，跳过 ${result.data.skipped}（${result.data.sourcePath}）`
+    );
     await loadList();
-  }, [importPath, loadList, notify]);
-
-  const onPickExportPath = useCallback(async () => {
-    const result = await window.vault.dialog.pickExportPath({
-      format: exportFormat,
-      defaultPath: exportPath,
-    });
-    if (!result.ok) {
-      notify(result.error.message);
-      return;
-    }
-    setExportPath(result.data.path);
-  }, [exportFormat, exportPath, notify]);
+  }, [loadList, notify]);
 
   const onConfirmExport = useCallback(async () => {
-    const path = exportPath.trim();
-    if (!path) {
-      notify("导出路径不能为空");
-      return;
-    }
-
     setBusy(true);
     const result =
       exportFormat === "json"
-        ? await window.vault.prompt.exportJson({ outputPath: path, includeDeleted: exportIncludeDeleted })
+        ? await window.vault.prompt.exportJson({ includeDeleted: exportIncludeDeleted })
         : await window.vault.prompt.exportMarkdown({
-            outputPath: path,
             includeDeleted: exportIncludeDeleted,
           });
     setBusy(false);
@@ -331,7 +297,7 @@ export default function App() {
 
     setExportModalOpen(false);
     notify(`导出完成：${result.data.outputPath}`);
-  }, [exportFormat, exportIncludeDeleted, exportPath, notify]);
+  }, [exportFormat, exportIncludeDeleted, notify]);
 
   useEffect(() => {
     void loadList();
@@ -560,18 +526,7 @@ export default function App() {
         }
       >
         <label className="field">
-          <span>文件路径</span>
-          <div className="toolbar-row">
-            <input
-              className="input"
-              value={importPath}
-              onChange={(e) => setImportPath(e.target.value)}
-              placeholder="/path/to/prompts.json"
-            />
-            <button className="btn ghost" onClick={() => void onPickImportFile()}>
-              选择
-            </button>
-          </div>
+          <span>将从系统文件选择器选择 JSON 文件。</span>
         </label>
       </Modal>
 
@@ -598,22 +553,14 @@ export default function App() {
             onChange={(e) => {
               const format = e.target.value as "json" | "markdown";
               setExportFormat(format);
-              setExportPath(format === "json" ? "prompt_vault_export.json" : "prompt_vault_export.md");
             }}
           >
             <option value="json">json</option>
             <option value="markdown">markdown</option>
           </select>
         </label>
-
         <label className="field">
-          <span>导出路径</span>
-          <div className="toolbar-row">
-            <input className="input" value={exportPath} onChange={(e) => setExportPath(e.target.value)} />
-            <button className="btn ghost" onClick={() => void onPickExportPath()}>
-              选择
-            </button>
-          </div>
+          <span>将通过系统文件选择器指定导出位置。</span>
         </label>
 
         <label className="checkbox-row">

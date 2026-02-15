@@ -1,15 +1,18 @@
 import { clipboard, dialog, ipcMain } from "electron";
 
-import type {
-  PickExportPathInput,
-  PromptListInput,
-  PromptRenderInput,
-  PromptUpsertInput,
-  Result,
-} from "../shared/types";
+import type { Result } from "../shared/types";
+import { AppException } from "./appError";
 import { fail, ok, toAppError } from "./errors";
 import { getHealthPayload } from "./health";
 import { exportToJson, exportToMarkdown, importFromJson } from "./importExportService";
+import {
+  normalizeIncludeDeletedPayload,
+  normalizePromptId,
+  normalizePromptListInput,
+  normalizePromptRenderInput,
+  normalizePromptUpsertInput,
+  normalizeUpdatePayload,
+} from "./ipcValidation";
 import {
   createPrompt,
   getPrompt,
@@ -19,12 +22,36 @@ import {
   updatePrompt,
 } from "./promptRepository";
 
-async function safeRun<T>(fn: () => T): Promise<Result<T>> {
+async function safeRun<T>(fn: () => Promise<T> | T): Promise<Result<T>> {
   try {
-    return ok(fn());
+    return ok(await fn());
   } catch (error) {
     return fail(toAppError(error));
   }
+}
+
+async function pickImportPath(): Promise<string> {
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    throw new AppException("VALIDATION_ERROR", "已取消操作");
+  }
+  return result.filePaths[0];
+}
+
+async function pickExportPath(format: "json" | "markdown"): Promise<string> {
+  const ext = format === "markdown" ? "md" : "json";
+  const result = await dialog.showSaveDialog({
+    filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+  });
+
+  if (result.canceled || !result.filePath) {
+    throw new AppException("VALIDATION_ERROR", "已取消操作");
+  }
+  return result.filePath;
 }
 
 export function registerIpcHandlers(): void {
@@ -39,107 +66,89 @@ export function registerIpcHandlers(): void {
   ipcMain.removeHandler("vault:prompt:importJson");
   ipcMain.removeHandler("vault:prompt:exportJson");
   ipcMain.removeHandler("vault:prompt:exportMarkdown");
-  ipcMain.removeHandler("vault:dialog:pickImportFile");
-  ipcMain.removeHandler("vault:dialog:pickExportPath");
 
   ipcMain.handle("vault:health", () => safeRun(() => getHealthPayload()));
 
-  ipcMain.handle("vault:prompt:list", (_event, input: PromptListInput) =>
-    safeRun(() =>
-      listPrompts({
-        query: input?.query ?? "",
-        includeDeleted: Boolean(input?.includeDeleted),
-        limit: input?.limit ?? 50,
-        offset: input?.offset ?? 0,
-      })
-    )
+  ipcMain.handle("vault:prompt:list", (_event, input: unknown) =>
+    safeRun(() => {
+      const normalized = normalizePromptListInput(input);
+      return listPrompts(normalized);
+    })
   );
 
-  ipcMain.handle("vault:prompt:get", (_event, promptId: string) =>
+  ipcMain.handle("vault:prompt:get", (_event, promptIdRaw: unknown) =>
     safeRun(() => {
+      const promptId = normalizePromptId(promptIdRaw);
       const prompt = getPrompt(promptId);
       if (!prompt) {
-        throw new Error("提示词不存在");
+        throw new AppException("NOT_FOUND", "提示词不存在");
       }
       return prompt;
     })
   );
 
-  ipcMain.handle("vault:prompt:create", (_event, input: PromptUpsertInput) =>
-    safeRun(() => createPrompt(input))
-  );
-
-  ipcMain.handle("vault:prompt:update", (_event, payload: { promptId: string; input: PromptUpsertInput }) =>
-    safeRun(() => updatePrompt(payload.promptId, payload.input))
-  );
-
-  ipcMain.handle("vault:prompt:softDelete", (_event, promptId: string) =>
+  ipcMain.handle("vault:prompt:create", (_event, inputRaw: unknown) =>
     safeRun(() => {
+      const input = normalizePromptUpsertInput(inputRaw);
+      return createPrompt(input);
+    })
+  );
+
+  ipcMain.handle("vault:prompt:update", (_event, payloadRaw: unknown) =>
+    safeRun(() => {
+      const payload = normalizeUpdatePayload(payloadRaw);
+      return updatePrompt(payload.promptId, payload.input);
+    })
+  );
+
+  ipcMain.handle("vault:prompt:softDelete", (_event, promptIdRaw: unknown) =>
+    safeRun(() => {
+      const promptId = normalizePromptId(promptIdRaw);
       const deleted = softDeletePrompt(promptId);
       if (!deleted) {
-        throw new Error("提示词不存在");
+        throw new AppException("NOT_FOUND", "提示词不存在");
       }
       return { deleted: true as const };
     })
   );
 
-  ipcMain.handle("vault:prompt:render", (_event, input: PromptRenderInput) =>
+  ipcMain.handle("vault:prompt:render", (_event, inputRaw: unknown) =>
     safeRun(() => {
+      const input = normalizePromptRenderInput(inputRaw);
       const content = renderPrompt(input.promptId, input.variables);
       return { content };
     })
   );
 
-  ipcMain.handle("vault:prompt:copyRendered", (_event, input: PromptRenderInput) =>
+  ipcMain.handle("vault:prompt:copyRendered", (_event, inputRaw: unknown) =>
     safeRun(() => {
+      const input = normalizePromptRenderInput(inputRaw);
       const content = renderPrompt(input.promptId, input.variables);
       clipboard.writeText(content);
       return { copied: true as const, content };
     })
   );
 
-  ipcMain.handle("vault:prompt:importJson", (_event, payload: { inputPath: string }) =>
-    safeRun(() => importFromJson(payload.inputPath))
-  );
-
-  ipcMain.handle(
-    "vault:prompt:exportJson",
-    (_event, payload: { outputPath: string; includeDeleted: boolean }) =>
-      safeRun(() => exportToJson(payload.outputPath, payload.includeDeleted))
-  );
-
-  ipcMain.handle(
-    "vault:prompt:exportMarkdown",
-    (_event, payload: { outputPath: string; includeDeleted: boolean }) =>
-      safeRun(() => exportToMarkdown(payload.outputPath, payload.includeDeleted))
-  );
-
-  ipcMain.handle("vault:dialog:pickImportFile", () =>
-    safeRun(() => {
-      const result = dialog.showOpenDialogSync({
-        properties: ["openFile"],
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-
-      if (!result || result.length === 0) {
-        throw new Error("已取消操作");
-      }
-      return { path: result[0] };
+  ipcMain.handle("vault:prompt:importJson", () =>
+    safeRun(async () => {
+      const inputPath = await pickImportPath();
+      return importFromJson(inputPath);
     })
   );
 
-  ipcMain.handle("vault:dialog:pickExportPath", (_event, input: PickExportPathInput) =>
-    safeRun(() => {
-      const ext = input.format === "markdown" ? "md" : "json";
-      const result = dialog.showSaveDialogSync({
-        defaultPath: input.defaultPath,
-        filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
-      });
+  ipcMain.handle("vault:prompt:exportJson", (_event, payloadRaw: unknown) =>
+    safeRun(async () => {
+      const { includeDeleted } = normalizeIncludeDeletedPayload(payloadRaw);
+      const outputPath = await pickExportPath("json");
+      return exportToJson(outputPath, includeDeleted);
+    })
+  );
 
-      if (!result) {
-        throw new Error("已取消操作");
-      }
-      return { path: result };
+  ipcMain.handle("vault:prompt:exportMarkdown", (_event, payloadRaw: unknown) =>
+    safeRun(async () => {
+      const { includeDeleted } = normalizeIncludeDeletedPayload(payloadRaw);
+      const outputPath = await pickExportPath("markdown");
+      return exportToMarkdown(outputPath, includeDeleted);
     })
   );
 }

@@ -1,6 +1,7 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 
+import { AppException } from "./appError";
 import {
   createPrompt,
   listAllPrompts,
@@ -16,22 +17,28 @@ type ImportItem = {
   isDeleted?: unknown;
 };
 
-function ensureDir(filePath: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+async function ensureDir(filePath: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
 }
 
-export function importFromJson(inputPath: string): { added: number; skipped: number } {
-  const raw = fs.readFileSync(inputPath, "utf-8");
+export async function importFromJson(inputPath: string): Promise<{ added: number; skipped: number; sourcePath: string }> {
+  let raw = "";
+  try {
+    raw = await fs.readFile(inputPath, "utf-8");
+  } catch {
+    throw new AppException("IO_ERROR", `读取导入文件失败: ${inputPath}`);
+  }
+
   let payload: unknown;
 
   try {
     payload = JSON.parse(raw);
   } catch {
-    throw new Error("IMPORT_FORMAT_ERROR: JSON 解析失败");
+    throw new AppException("IMPORT_FORMAT_ERROR", "JSON 解析失败");
   }
 
   if (!Array.isArray(payload)) {
-    throw new Error("IMPORT_FORMAT_ERROR: 导入文件必须是数组");
+    throw new AppException("IMPORT_FORMAT_ERROR", "导入文件必须是数组");
   }
 
   let added = 0;
@@ -69,10 +76,13 @@ export function importFromJson(inputPath: string): { added: number; skipped: num
     added += 1;
   }
 
-  return { added, skipped };
+  return { added, skipped, sourcePath: inputPath };
 }
 
-export function exportToJson(outputPath: string, includeDeleted: boolean): { outputPath: string } {
+export async function exportToJson(
+  outputPath: string,
+  includeDeleted: boolean
+): Promise<{ outputPath: string }> {
   const prompts = listAllPrompts(includeDeleted).map((item) => ({
     id: item.id,
     title: item.title,
@@ -83,12 +93,15 @@ export function exportToJson(outputPath: string, includeDeleted: boolean): { out
     updated_at: item.updatedAt,
   }));
 
-  ensureDir(outputPath);
-  fs.writeFileSync(outputPath, `${JSON.stringify(prompts, null, 2)}\n`, "utf-8");
+  await ensureDir(outputPath);
+  await fs.writeFile(outputPath, `${JSON.stringify(prompts, null, 2)}\n`, "utf-8");
   return { outputPath };
 }
 
-export function exportToMarkdown(outputPath: string, includeDeleted: boolean): { outputPath: string } {
+export async function exportToMarkdown(
+  outputPath: string,
+  includeDeleted: boolean
+): Promise<{ outputPath: string }> {
   const prompts = listAllPrompts(includeDeleted);
   const lines: string[] = ["# Prompt Vault 导出", ""];
 
@@ -105,7 +118,7 @@ export function exportToMarkdown(outputPath: string, includeDeleted: boolean): {
     lines.push("");
   }
 
-  ensureDir(outputPath);
-  fs.writeFileSync(outputPath, `${lines.join("\n")}\n`, "utf-8");
+  await ensureDir(outputPath);
+  await fs.writeFile(outputPath, `${lines.join("\n")}\n`, "utf-8");
   return { outputPath };
 }

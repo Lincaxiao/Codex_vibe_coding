@@ -9,6 +9,12 @@ Prompt Vault is now a macOS-only desktop app built with Electron + TypeScript + 
 - Renderer: React + Vite
 - API boundary: `window.vault.*` IPC contract
 
+## Security Notes
+
+- Import/export paths are selected only in the main process via system dialogs.
+- Renderer does not pass arbitrary filesystem paths to backend handlers.
+- Production renderer uses a strict Content Security Policy.
+
 ## Development
 
 ```bash
@@ -34,6 +40,8 @@ npm start
 cd prompt_vault
 npm run test
 ```
+
+`npm run test` 会先执行 `npm rebuild better-sqlite3`，避免在执行过 `dist:mac` 后出现 Node/Electron ABI 不匹配。
 
 Optional Electron e2e smoke test:
 

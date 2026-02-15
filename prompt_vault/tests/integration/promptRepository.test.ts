@@ -88,18 +88,18 @@ describe("promptRepository integration", () => {
     expect(content).toBe("hello World");
   });
 
-  test("import/export roundtrip", () => {
+  test("import/export roundtrip", async () => {
     prepareDb("export_src");
 
     createPrompt({ title: "A", body: "Body A", tags: ["a"] });
     createPrompt({ title: "B", body: "Body B", tags: ["b"] });
 
     const jsonPath = path.join(workspace, "prompts.json");
-    exportToJson(jsonPath, true);
+    await exportToJson(jsonPath, true);
     expect(fs.existsSync(jsonPath)).toBe(true);
 
     prepareDb("import_target");
-    const result = importFromJson(jsonPath);
+    const result = await importFromJson(jsonPath);
     expect(result.added).toBe(2);
     expect(listAllPrompts(true)).toHaveLength(2);
   });
