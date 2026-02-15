@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .path_utils import validate_path_component
+from .subprocess_stream import run_process_streaming
 
 DEFAULT_CODEX_EXEC_TIMEOUT_SECONDS = 30 * 60
 DEFAULT_CODEX_VERSION_TIMEOUT_SECONDS = 20
@@ -286,18 +287,31 @@ class CodexExecutor:
             error=final_error,
         )
 
-    def probe_cli(self) -> dict[str, Any]:
-        version = self._read_codex_version()
+    def probe_cli(
+        self,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        version = self._read_codex_version(cancel_check=cancel_check)
+        if version == "unknown (cancelled)":
+            return {
+                "available": False,
+                "version": version,
+                "error": "cancelled by user",
+                "cancelled": True,
+            }
         if version.startswith("unknown"):
             return {
                 "available": False,
                 "version": version,
                 "error": "codex CLI unavailable",
+                "cancelled": False,
             }
         return {
             "available": True,
             "version": version,
             "error": None,
+            "cancelled": False,
         }
 
     def _emit_progress(
@@ -386,55 +400,24 @@ class CodexExecutor:
         timeout_seconds: int,
         cancel_check: Callable[[], bool],
     ) -> tuple[int, str, bool, bool, str | None]:
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=cwd,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-        except OSError as exc:
-            return (127, f"failed to launch codex: {exc}", False, False, f"failed to launch codex: {exc}")
+        result = run_process_streaming(
+            command=command,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            cancel_check=cancel_check,
+        )
+        if result.launch_error is not None:
+            error = result.launch_error.replace("failed to launch process", "failed to launch codex", 1)
+            return (127, error, False, False, error)
 
-        deadline = time.monotonic() + timeout_seconds
-        timed_out = False
-        cancelled = False
-        while True:
-            if cancel_check():
-                cancelled = True
-                self._terminate_process(process)
-                break
-            if process.poll() is not None:
-                break
-            if time.monotonic() >= deadline:
-                timed_out = True
-                self._terminate_process(process)
-                break
-            time.sleep(0.1)
-
-        try:
-            stdout, stderr = process.communicate(timeout=1)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, stderr = process.communicate()
-        stdio = self._merge_stdio(stdout or "", stderr or "")
-        if timed_out:
+        stdio = self._merge_stdio(result.stdout, result.stderr)
+        if result.timed_out:
             stdio = f"{stdio}\ncodex exec timed out after {timeout_seconds}s".strip()
             return (124, stdio, True, False, None)
-        if cancelled:
+        if result.cancelled:
             stdio = f"{stdio}\ncancelled by user".strip()
             return (130, stdio, False, True, None)
-        return (process.returncode or 0, stdio, False, False, None)
-
-    def _terminate_process(self, process: subprocess.Popen[str]) -> None:
-        if process.poll() is not None:
-            return
-        process.terminate()
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            process.kill()
+        return (result.exit_code, stdio, False, False, None)
 
     def _normalize_extra_allowed_dirs(
         self,
@@ -456,7 +439,28 @@ class CodexExecutor:
             normalized.append(path)
         return normalized
 
-    def _read_codex_version(self) -> str:
+    def _read_codex_version(
+        self,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> str:
+        if cancel_check is not None:
+            result = run_process_streaming(
+                command=["codex", "--version"],
+                cwd=None,
+                timeout_seconds=self.version_timeout_seconds,
+                cancel_check=cancel_check,
+            )
+            if result.cancelled:
+                return "unknown (cancelled)"
+            if result.timed_out:
+                return f"unknown (timeout>{self.version_timeout_seconds}s)"
+            if result.launch_error is not None:
+                return "unknown (codex-not-found)"
+            stdio = self._merge_stdio(result.stdout, result.stderr)
+            line = self._first_nonempty_line(stdio)
+            return line or "unknown"
+
         try:
             completed = subprocess.run(
                 ["codex", "--version"],

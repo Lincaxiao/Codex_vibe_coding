@@ -248,6 +248,12 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertFalse(payload["available"])
         self.assertIn("unavailable", payload["error"])
 
+    def test_probe_cli_reports_cancelled(self) -> None:
+        payload = self.executor.probe_cli(cancel_check=lambda: True)
+        self.assertFalse(payload["available"])
+        self.assertTrue(payload["cancelled"])
+        self.assertEqual(payload["error"], "cancelled by user")
+
     def test_run_cancelled_before_attempt(self) -> None:
         calls: list[list[str]] = []
 
@@ -297,6 +303,24 @@ class CodexExecutorTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.exit_code, 130)
         self.assertEqual(result.error, "cancelled by user")
+
+    def test_run_exec_with_cancel_handles_large_output_without_false_timeout(self) -> None:
+        command = [
+            "python3",
+            "-c",
+            "import sys; sys.stdout.write('x' * (2 * 1024 * 1024)); sys.stdout.flush()",
+        ]
+        exit_code, stdio, timed_out, cancelled, launch_error = self.executor._run_exec_with_cancel(
+            command=command,
+            cwd=self.project_root,
+            timeout_seconds=5,
+            cancel_check=lambda: False,
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(timed_out)
+        self.assertFalse(cancelled)
+        self.assertIsNone(launch_error)
+        self.assertGreater(len(stdio), 1500 * 1024)
 
     def test_run_emits_progress_messages(self) -> None:
         def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]

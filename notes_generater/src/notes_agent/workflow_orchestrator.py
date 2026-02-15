@@ -119,6 +119,7 @@ class WorkflowOrchestrator:
         search_enabled: bool = False,
         auto_repair_check_failures: bool = True,
         progress_callback: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         started_at = _now_iso()
         root = Path(project_root).expanduser().resolve()
@@ -128,6 +129,24 @@ class WorkflowOrchestrator:
         lecture_scope: dict[str, list[Path]] = {}
 
         self._emit_progress(progress_callback, "[preflight] 开始执行流程预检查")
+
+        def is_cancelled() -> bool:
+            return cancel_check is not None and cancel_check()
+
+        def finalize(
+            *,
+            context: dict[str, Any],
+            cancelled: bool = False,
+        ) -> dict[str, Any]:
+            return self._finalize_preflight_result(
+                started_at=started_at,
+                checks=checks,
+                errors=errors,
+                warnings=warnings,
+                context=context,
+                progress_callback=progress_callback,
+                cancelled=cancelled,
+            )
 
         def add_check(name: str, passed: bool, message: str, *, severity: str = "error") -> None:
             status = "ok" if passed else ("warning" if severity == "warning" else "error")
@@ -148,20 +167,27 @@ class WorkflowOrchestrator:
             label = "通过" if status == "ok" else ("警告" if status == "warning" else "失败")
             self._emit_progress(progress_callback, f"[preflight] {label} {name}: {message}")
 
+        if is_cancelled():
+            errors.append("cancelled by user")
+            self._emit_progress(progress_callback, "[preflight] 收到取消请求，终止预检查")
+            return finalize(context={"project_root": str(root)}, cancelled=True)
+
         try:
             config = self.project_service.load_project_config(root)
             add_check("project_config", True, str(config.project_root))
         except (ValueError, FileNotFoundError, OSError) as exc:
             add_check("project_config", False, str(exc))
-            return self._finalize_preflight_result(
-                started_at=started_at,
-                checks=checks,
-                errors=errors,
-                warnings=warnings,
+            return finalize(context={"project_root": str(root)})
+
+        if is_cancelled():
+            errors.append("cancelled by user")
+            self._emit_progress(progress_callback, "[preflight] 收到取消请求，终止预检查")
+            return finalize(
                 context={
                     "project_root": str(root),
+                    "notes_root": str(config.notes_root),
                 },
-                progress_callback=progress_callback,
+                cancelled=True,
             )
 
         try:
@@ -169,19 +195,22 @@ class WorkflowOrchestrator:
             add_check("round_range", True, f"{from_round}->{to_round} ({', '.join(rounds)})")
         except ValueError as exc:
             add_check("round_range", False, str(exc))
-            return self._finalize_preflight_result(
-                started_at=started_at,
-                checks=checks,
-                errors=errors,
-                warnings=warnings,
-                context={
-                    "project_root": str(root),
-                },
-                progress_callback=progress_callback,
-            )
+            return finalize(context={"project_root": str(root)})
 
         notes = Path(notes_root).expanduser().resolve() if notes_root else config.notes_root
         add_check("notes_root", True, str(notes))
+
+        if is_cancelled():
+            errors.append("cancelled by user")
+            self._emit_progress(progress_callback, "[preflight] 收到取消请求，终止预检查")
+            return finalize(
+                context={
+                    "project_root": str(root),
+                    "notes_root": str(notes),
+                    "rounds": rounds,
+                },
+                cancelled=True,
+            )
 
         templates = self.prompt_template_service.load_templates(project_root=root)
         required_templates = [item for item in rounds if item != "round0"]
@@ -195,6 +224,17 @@ class WorkflowOrchestrator:
 
         requires_lecture_scope = any(round_name != "round0" for round_name in rounds)
         if requires_lecture_scope:
+            if is_cancelled():
+                errors.append("cancelled by user")
+                self._emit_progress(progress_callback, "[preflight] 收到取消请求，终止预检查")
+                return finalize(
+                    context={
+                        "project_root": str(root),
+                        "notes_root": str(notes),
+                        "rounds": rounds,
+                    },
+                    cancelled=True,
+                )
             try:
                 lecture_scope = self.lecture_registry_service.resolve_paths(
                     project_root=root,
@@ -210,7 +250,31 @@ class WorkflowOrchestrator:
             else:
                 add_check("check_script", False, f"缺少检查脚本: {check_script}（请先执行 round0）")
 
-            probe = self._probe_codex_cli()
+            if is_cancelled():
+                errors.append("cancelled by user")
+                self._emit_progress(progress_callback, "[preflight] 收到取消请求，终止预检查")
+                return finalize(
+                    context={
+                        "project_root": str(root),
+                        "notes_root": str(notes),
+                        "rounds": rounds,
+                        "target_lectures": list(lecture_scope.keys()),
+                    },
+                    cancelled=True,
+                )
+            probe = self._probe_codex_cli(cancel_check=cancel_check)
+            if probe.get("cancelled") is True:
+                errors.append("cancelled by user")
+                self._emit_progress(progress_callback, "[preflight] Codex CLI 探测已取消")
+                return finalize(
+                    context={
+                        "project_root": str(root),
+                        "notes_root": str(notes),
+                        "rounds": rounds,
+                        "target_lectures": list(lecture_scope.keys()),
+                    },
+                    cancelled=True,
+                )
             if probe["available"] is True:
                 add_check("codex_cli", True, f"version={probe['version']}")
             elif probe["available"] is False:
@@ -260,14 +324,7 @@ class WorkflowOrchestrator:
             "allow_external_refs": allow_external_refs,
             "search_enabled": search_enabled,
         }
-        return self._finalize_preflight_result(
-            started_at=started_at,
-            checks=checks,
-            errors=errors,
-            warnings=warnings,
-            context=context,
-            progress_callback=progress_callback,
-        )
+        return finalize(context=context)
 
     def run(
         self,
@@ -1095,29 +1152,40 @@ class WorkflowOrchestrator:
             inspect.Parameter.KEYWORD_ONLY,
         }
 
-    def _probe_codex_cli(self) -> dict[str, Any]:
+    def _probe_codex_cli(
+        self,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         probe = getattr(self.codex_executor, "probe_cli", None)
         if probe is None or not callable(probe):
             return {
                 "available": None,
                 "version": "unknown",
                 "error": "当前执行器未实现 codex CLI 预检查接口",
+                "cancelled": False,
             }
         try:
-            payload = probe()
+            if cancel_check is not None and self._callable_supports_kwarg(probe, "cancel_check"):
+                payload = probe(cancel_check=cancel_check)
+            else:
+                payload = probe()
         except Exception as exc:
             return {
                 "available": False,
                 "version": "unknown",
                 "error": f"codex CLI 预检查失败: {exc}",
+                "cancelled": False,
             }
         available = payload.get("available")
         version = str(payload.get("version", "unknown"))
         error = payload.get("error")
+        cancelled = bool(payload.get("cancelled", False))
         return {
             "available": available if isinstance(available, bool) else None,
             "version": version,
             "error": str(error) if error is not None else None,
+            "cancelled": cancelled,
         }
 
     def _ensure_writable_dir(
@@ -1155,11 +1223,13 @@ class WorkflowOrchestrator:
         warnings: list[str],
         context: dict[str, Any],
         progress_callback: Callable[[str], None] | None,
+        cancelled: bool = False,
     ) -> dict[str, Any]:
         finished_at = _now_iso()
-        passed = len(errors) == 0
+        passed = len(errors) == 0 and not cancelled
         payload = {
             "passed": passed,
+            "cancelled": cancelled,
             "errors": errors,
             "warnings": warnings,
             "checks": checks,
@@ -1167,7 +1237,7 @@ class WorkflowOrchestrator:
             "started_at": started_at,
             "finished_at": finished_at,
         }
-        self._emit_progress(progress_callback, f"[preflight] 结束 passed={passed}")
+        self._emit_progress(progress_callback, f"[preflight] 结束 passed={passed}, cancelled={cancelled}")
         return payload
 
     def _emit_progress(

@@ -84,8 +84,17 @@ class FakeCodexExecutorWithProbe(FakeCodexExecutor):
             "error": error,
         }
 
-    def probe_cli(self) -> dict[str, object]:
-        return dict(self._probe_payload)
+    def probe_cli(self, *, cancel_check: Callable[[], bool] | None = None) -> dict[str, object]:
+        if cancel_check is not None and cancel_check():
+            return {
+                "available": False,
+                "version": "unknown (cancelled)",
+                "error": "cancelled by user",
+                "cancelled": True,
+            }
+        payload = dict(self._probe_payload)
+        payload.setdefault("cancelled", False)
+        return payload
 
 
 class RaisingCodexExecutor:
@@ -837,6 +846,29 @@ class WorkflowOrchestratorTests(unittest.TestCase):
         self.assertEqual(payload["errors"], [])
         self.assertEqual(payload["warnings"], [])
         self.assertIn("round1", payload["context"]["rounds"])
+
+    def test_preflight_returns_cancelled_when_probe_is_cancelled(self) -> None:
+        Round0Initializer().initialize(
+            project_root=self.config.project_root,
+            notes_root=self.config.notes_root,
+            course_id=self.config.course_id,
+        )
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutorWithProbe(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+
+        payload = orchestrator.preflight(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            cancel_check=lambda: True,
+        )
+        self.assertFalse(payload["passed"])
+        self.assertTrue(payload["cancelled"])
+        self.assertIn("cancelled by user", payload["errors"])
 
 
 if __name__ == "__main__":

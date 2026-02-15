@@ -912,6 +912,7 @@ def main() -> int:
                     allow_external_refs=options["allow_external_refs"],
                     search_enabled=options["search_enabled"],
                     progress_callback=progress,
+                    cancel_check=cancel_check,
                 )
 
             self._save_settings()

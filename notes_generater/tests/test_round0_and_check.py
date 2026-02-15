@@ -160,6 +160,22 @@ class Round0AndCheckTests(unittest.TestCase):
         self.assertIsNone(result.payload)
         self.assertIn("cancelled by user", result.stderr)
 
+    def test_run_with_cancel_handles_large_output_without_false_timeout(self) -> None:
+        exit_code, stdout, stderr, timed_out, cancelled = self.check_runner._run_with_cancel(
+            cmd=[
+                "python3",
+                "-c",
+                "import sys; sys.stdout.write('x' * (2 * 1024 * 1024)); sys.stdout.flush()",
+            ],
+            timeout_seconds=5,
+            cancel_check=lambda: False,
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(timed_out)
+        self.assertFalse(cancelled)
+        self.assertEqual(stderr, "")
+        self.assertGreater(len(stdout), 1500 * 1024)
+
 
 if __name__ == "__main__":
     unittest.main()
