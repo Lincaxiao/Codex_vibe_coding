@@ -138,6 +138,32 @@ def build_parser() -> argparse.ArgumentParser:
     run_check_parser.add_argument("--project-root", required=True, type=Path)
     run_check_parser.add_argument("--notes-root", type=Path, help="Optional override; defaults to project config")
 
+    preflight_parser = subparsers.add_parser(
+        "preflight-workflow",
+        help="Run workflow preflight checks (codex/check script/lectures/templates/permissions)",
+    )
+    preflight_parser.add_argument("--project-root", required=True, type=Path)
+    preflight_parser.add_argument("--notes-root", type=Path, help="Optional override; defaults to project config")
+    preflight_parser.add_argument(
+        "--from-round",
+        choices=["round0", "round1", "round2", "round3", "final"],
+        default="round1",
+    )
+    preflight_parser.add_argument(
+        "--to-round",
+        choices=["round0", "round1", "round2", "round3", "final"],
+        default="final",
+    )
+    preflight_parser.add_argument(
+        "--target-lecture",
+        dest="target_lectures",
+        action="append",
+        help="Target lecture identifier (repeatable)",
+    )
+    preflight_parser.add_argument("--allow-external-refs", action="store_true")
+    preflight_parser.add_argument("--search", action="store_true")
+    preflight_parser.add_argument("--disable-auto-repair", action="store_true")
+
     workflow_parser = subparsers.add_parser(
         "run-workflow",
         help="Run workflow rounds (round0/1/2/3/final) with per-round check",
@@ -421,6 +447,24 @@ def main() -> int:
         check_result = check_runner.run(project_root=args.project_root, notes_root=notes_root)
         print(json.dumps(check_result.to_dict(), indent=2, ensure_ascii=False))
         return 0 if check_result.passed else 1
+
+    if args.command == "preflight-workflow":
+        try:
+            payload = workflow_orchestrator.preflight(
+                project_root=args.project_root,
+                notes_root=args.notes_root,
+                from_round=args.from_round,
+                to_round=args.to_round,
+                target_lectures=args.target_lectures or [],
+                allow_external_refs=args.allow_external_refs,
+                search_enabled=args.search,
+                auto_repair_check_failures=not args.disable_auto_repair,
+            )
+        except (ValueError, OSError) as exc:
+            print(json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False))
+            return 2
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0 if payload.get("passed") else 1
 
     if args.command == "run-workflow":
         try:

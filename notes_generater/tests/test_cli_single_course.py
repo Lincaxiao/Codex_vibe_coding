@@ -33,6 +33,22 @@ class CliSingleCourseParserTests(unittest.TestCase):
             self.parser.parse_args(["list-projects", "--workspace-root", "/tmp/ws"])
         self.assertEqual(ctx.exception.code, 2)
 
+    def test_preflight_workflow_command_accepts_rounds(self) -> None:
+        args = self.parser.parse_args(
+            [
+                "preflight-workflow",
+                "--project-root",
+                "/tmp/project",
+                "--from-round",
+                "round0",
+                "--to-round",
+                "round1",
+            ]
+        )
+        self.assertEqual(args.command, "preflight-workflow")
+        self.assertEqual(args.from_round, "round0")
+        self.assertEqual(args.to_round, "round1")
+
 
 if __name__ == "__main__":
     unittest.main()

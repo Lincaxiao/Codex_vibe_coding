@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -106,6 +107,168 @@ class WorkflowOrchestrator:
         self.prompt_template_service = prompt_template_service or PromptTemplateService()
         self.lecture_registry_service = lecture_registry_service or LectureRegistryService()
 
+    def preflight(
+        self,
+        *,
+        project_root: Path | str,
+        from_round: RoundName = "round1",
+        to_round: RoundName = "final",
+        notes_root: Path | str | None = None,
+        target_lectures: list[str] | None = None,
+        allow_external_refs: bool = False,
+        search_enabled: bool = False,
+        auto_repair_check_failures: bool = True,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> dict[str, Any]:
+        started_at = _now_iso()
+        root = Path(project_root).expanduser().resolve()
+        checks: list[dict[str, Any]] = []
+        errors: list[str] = []
+        warnings: list[str] = []
+        lecture_scope: dict[str, list[Path]] = {}
+
+        self._emit_progress(progress_callback, "[preflight] 开始执行流程预检查")
+
+        def add_check(name: str, passed: bool, message: str, *, severity: str = "error") -> None:
+            status = "ok" if passed else ("warning" if severity == "warning" else "error")
+            checks.append(
+                {
+                    "name": name,
+                    "status": status,
+                    "passed": passed,
+                    "message": message,
+                }
+            )
+            if not passed:
+                entry = f"{name}: {message}"
+                if status == "warning":
+                    warnings.append(entry)
+                else:
+                    errors.append(entry)
+            label = "通过" if status == "ok" else ("警告" if status == "warning" else "失败")
+            self._emit_progress(progress_callback, f"[preflight] {label} {name}: {message}")
+
+        try:
+            config = self.project_service.load_project_config(root)
+            add_check("project_config", True, str(config.project_root))
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            add_check("project_config", False, str(exc))
+            return self._finalize_preflight_result(
+                started_at=started_at,
+                checks=checks,
+                errors=errors,
+                warnings=warnings,
+                context={
+                    "project_root": str(root),
+                },
+                progress_callback=progress_callback,
+            )
+
+        try:
+            rounds = self._select_rounds(from_round=from_round, to_round=to_round)
+            add_check("round_range", True, f"{from_round}->{to_round} ({', '.join(rounds)})")
+        except ValueError as exc:
+            add_check("round_range", False, str(exc))
+            return self._finalize_preflight_result(
+                started_at=started_at,
+                checks=checks,
+                errors=errors,
+                warnings=warnings,
+                context={
+                    "project_root": str(root),
+                },
+                progress_callback=progress_callback,
+            )
+
+        notes = Path(notes_root).expanduser().resolve() if notes_root else config.notes_root
+        add_check("notes_root", True, str(notes))
+
+        templates = self.prompt_template_service.load_templates(project_root=root)
+        required_templates = [item for item in rounds if item != "round0"]
+        if required_templates and auto_repair_check_failures:
+            required_templates.append("repair")
+        missing_templates = [item for item in required_templates if not templates.get(item, "").strip()]
+        if missing_templates:
+            add_check("prompt_templates", False, f"缺少模板: {', '.join(sorted(set(missing_templates)))}")
+        else:
+            add_check("prompt_templates", True, f"已加载 {len(templates)} 个模板")
+
+        requires_lecture_scope = any(round_name != "round0" for round_name in rounds)
+        if requires_lecture_scope:
+            try:
+                lecture_scope = self.lecture_registry_service.resolve_paths(
+                    project_root=root,
+                    target_lectures=target_lectures or [],
+                )
+                add_check("lecture_scope", True, f"讲次数={len(lecture_scope)}")
+            except (ValueError, FileNotFoundError, OSError) as exc:
+                add_check("lecture_scope", False, str(exc))
+
+            check_script = notes / "scripts" / "check.sh"
+            if check_script.exists() and check_script.is_file():
+                add_check("check_script", True, str(check_script))
+            else:
+                add_check("check_script", False, f"缺少检查脚本: {check_script}（请先执行 round0）")
+
+            probe = self._probe_codex_cli()
+            if probe["available"] is True:
+                add_check("codex_cli", True, f"version={probe['version']}")
+            elif probe["available"] is False:
+                add_check("codex_cli", False, probe["error"] or "codex CLI 不可用")
+            else:
+                add_check("codex_cli", False, probe["error"] or "codex CLI 预检查已跳过", severity="warning")
+        else:
+            add_check("lecture_scope", True, "仅执行 round0，无需讲次映射")
+
+        writable_root_ok, writable_root_message = self._ensure_writable_dir(root)
+        add_check("project_root_writable", writable_root_ok, writable_root_message)
+
+        writable_notes_ok, writable_notes_message = self._ensure_writable_dir(notes, prefer_parent_if_missing=True)
+        add_check("notes_root_writable", writable_notes_ok, writable_notes_message)
+
+        effective_search_rounds = [
+            round_name
+            for round_name in rounds
+            if self._resolve_search_enabled(
+                round_name=round_name,
+                search_enabled=search_enabled,
+                allow_external_refs=allow_external_refs,
+            )
+        ]
+        if effective_search_rounds:
+            add_check("search_policy", True, f"启用网页搜索轮次: {', '.join(effective_search_rounds)}")
+        elif search_enabled and not allow_external_refs:
+            add_check(
+                "search_policy",
+                False,
+                "已请求搜索，但未允许外部参考；实际不会启用网页搜索",
+                severity="warning",
+            )
+        else:
+            add_check("search_policy", True, "网页搜索未启用")
+
+        context = {
+            "project_root": str(root),
+            "notes_root": str(notes),
+            "rounds": rounds,
+            "target_lectures": list(lecture_scope.keys()),
+            "lecture_scope": {
+                lec_id: [str(path) for path in paths]
+                for lec_id, paths in lecture_scope.items()
+            },
+            "effective_search_rounds": effective_search_rounds,
+            "allow_external_refs": allow_external_refs,
+            "search_enabled": search_enabled,
+        }
+        return self._finalize_preflight_result(
+            started_at=started_at,
+            checks=checks,
+            errors=errors,
+            warnings=warnings,
+            context=context,
+            progress_callback=progress_callback,
+        )
+
     def run(
         self,
         *,
@@ -123,6 +286,7 @@ class WorkflowOrchestrator:
         max_changed_lines: int | None = None,
         max_changed_files: int | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> WorkflowRunResult:
         started_at = _now_iso()
         root = Path(project_root).expanduser().resolve()
@@ -180,6 +344,10 @@ class WorkflowOrchestrator:
         finished_at = started_at
         try:
             for round_name in rounds:
+                if cancel_check is not None and cancel_check():
+                    workflow_status = "paused"
+                    self._emit_progress(progress_callback, "[workflow] 收到取消请求，流程已暂停")
+                    break
                 active_round = round_name
                 round_progress = self._round_progress(progress_callback, round_name=round_name)
                 self._emit_progress(progress_callback, f"[workflow] {round_name} 开始")
@@ -208,11 +376,12 @@ class WorkflowOrchestrator:
                     self._write_json(round_artifact_dir / "round0_init_result.json", init_result.to_dict())
                     check_output_path = round_artifact_dir / "check_result.json"
                     self._emit_progress(round_progress, "执行检查")
-                    check_result = self.check_runner.run(
+                    check_result = self._run_check(
                         project_root=root,
                         notes_root=notes,
                         output_path=check_output_path,
                         progress_callback=round_progress,
+                        cancel_check=cancel_check,
                     )
                     after_state = self.diff_service.capture_state(notes_root=notes)
                     diff_summary = self.diff_service.write_diff_artifacts(
@@ -250,6 +419,28 @@ class WorkflowOrchestrator:
                         self._write_json(round_status_path, round_status_payload)
                         break
                     if not check_result.passed:
+                        if check_result.exit_code == 130:
+                            round_status_payload["round0"] = "paused"
+                            workflow_status = "paused"
+                            round_results.append(
+                                RoundExecutionResult(
+                                    round_name="round0",
+                                    status="paused",
+                                    codex_run_id=None,
+                                    codex_success=None,
+                                    check_passed=False,
+                                    repaired=False,
+                                    check_output_path=str(check_output_path),
+                                    changed_files=diff_summary.changed_files,
+                                    changed_lines=diff_summary.changed_lines,
+                                    patch_path=str(diff_summary.patch_path),
+                                    notes_snapshot_path=str(diff_summary.notes_snapshot_path),
+                                    pause_reason="cancelled by user",
+                                    error="cancelled by user",
+                                )
+                            )
+                            self._write_json(round_status_path, round_status_payload)
+                            break
                         self._emit_progress(round_progress, f"检查失败：{self._check_error_summary(check_result)}")
                         round_status_payload["round0"] = "failed"
                         workflow_status = "failed_recoverable"
@@ -327,8 +518,8 @@ class WorkflowOrchestrator:
                     round_progress,
                     f"调用 Codex：run_id={codex_run_id}, search_enabled={round_search_enabled}",
                 )
-                codex_result = self.codex_executor.run(
-                    CodexRunRequest(
+                codex_result = self._run_codex(
+                    request=CodexRunRequest(
                         project_root=root,
                         notes_root=notes,
                         prompt=prompt,
@@ -338,6 +529,7 @@ class WorkflowOrchestrator:
                         extra_allowed_dirs=extra_allowed_dirs,
                     ),
                     progress_callback=round_progress,
+                    cancel_check=cancel_check,
                 )
 
                 final_run: CodexRunResult = codex_result
@@ -346,11 +538,12 @@ class WorkflowOrchestrator:
 
                 if codex_result.success:
                     self._emit_progress(round_progress, "执行检查")
-                    check_result = self.check_runner.run(
+                    check_result = self._run_check(
                         project_root=root,
                         notes_root=notes,
                         output_path=codex_result.run_dir / "check_result.json",
                         progress_callback=round_progress,
+                        cancel_check=cancel_check,
                     )
 
                     if not check_result.passed and auto_repair_check_failures:
@@ -362,8 +555,8 @@ class WorkflowOrchestrator:
                             template_text=prompt_templates.get("repair"),
                         )
                         repair_run_id = f"{workflow_id}_{round_name}_repair1"
-                        repair_result = self.codex_executor.run(
-                            CodexRunRequest(
+                        repair_result = self._run_codex(
+                            request=CodexRunRequest(
                                 project_root=root,
                                 notes_root=notes,
                                 prompt=repair_prompt,
@@ -373,16 +566,18 @@ class WorkflowOrchestrator:
                                 extra_allowed_dirs=extra_allowed_dirs,
                             ),
                             progress_callback=round_progress,
+                            cancel_check=cancel_check,
                         )
                         repaired = True
                         final_run = repair_result
                         if repair_result.success:
                             self._emit_progress(round_progress, "修复后重新执行检查")
-                            check_result = self.check_runner.run(
+                            check_result = self._run_check(
                                 project_root=root,
                                 notes_root=notes,
                                 output_path=repair_result.run_dir / "check_result.json",
                                 progress_callback=round_progress,
+                                cancel_check=cancel_check,
                             )
                         else:
                             check_result = None
@@ -425,6 +620,29 @@ class WorkflowOrchestrator:
                     break
 
                 if not final_run.success:
+                    if final_run.exit_code == 130:
+                        round_status_payload[round_name] = "paused"
+                        workflow_status = "paused"
+                        round_results.append(
+                            RoundExecutionResult(
+                                round_name=round_name,
+                                status="paused",
+                                codex_run_id=final_run.run_id,
+                                codex_success=False,
+                                check_passed=None,
+                                repaired=repaired,
+                                check_output_path=None,
+                                changed_files=diff_summary.changed_files,
+                                changed_lines=diff_summary.changed_lines,
+                                patch_path=str(diff_summary.patch_path),
+                                notes_snapshot_path=str(diff_summary.notes_snapshot_path),
+                                pause_reason="cancelled by user",
+                                error="cancelled by user",
+                            )
+                        )
+                        self._write_json(round_status_path, round_status_payload)
+                        self._emit_progress(round_progress, "收到取消请求，轮次已暂停")
+                        break
                     self._emit_progress(round_progress, f"Codex 执行失败：{final_run.error or 'unknown error'}")
                     round_status_payload[round_name] = "failed"
                     workflow_status = "failed_recoverable"
@@ -449,6 +667,31 @@ class WorkflowOrchestrator:
                     break
 
                 if check_result is None or not check_result.passed:
+                    if check_result is not None and check_result.exit_code == 130:
+                        round_status_payload[round_name] = "paused"
+                        workflow_status = "paused"
+                        round_results.append(
+                            RoundExecutionResult(
+                                round_name=round_name,
+                                status="paused",
+                                codex_run_id=final_run.run_id,
+                                codex_success=True,
+                                check_passed=False,
+                                repaired=repaired,
+                                check_output_path=str(final_run.run_dir / "check_result.json")
+                                if (final_run.run_dir / "check_result.json").exists()
+                                else None,
+                                changed_files=diff_summary.changed_files,
+                                changed_lines=diff_summary.changed_lines,
+                                patch_path=str(diff_summary.patch_path),
+                                notes_snapshot_path=str(diff_summary.notes_snapshot_path),
+                                pause_reason="cancelled by user",
+                                error="cancelled by user",
+                            )
+                        )
+                        self._write_json(round_status_path, round_status_payload)
+                        self._emit_progress(round_progress, "检查阶段已取消，轮次暂停")
+                        break
                     self._emit_progress(
                         round_progress,
                         f"检查失败：{self._check_error_summary(check_result) if check_result is not None else 'check result missing'}",
@@ -581,6 +824,7 @@ class WorkflowOrchestrator:
         max_changed_lines: int | None = None,
         max_changed_files: int | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> WorkflowRunResult:
         root = Path(project_root).expanduser().resolve()
         round_status_path = root / "state" / "round_status.json"
@@ -639,6 +883,7 @@ class WorkflowOrchestrator:
             max_changed_lines=max_changed_lines,
             max_changed_files=max_changed_files,
             progress_callback=progress_callback,
+            cancel_check=cancel_check,
         )
 
     def _select_rounds(self, *, from_round: RoundName, to_round: RoundName) -> list[RoundName]:
@@ -801,6 +1046,129 @@ class WorkflowOrchestrator:
             "snapshot hash verification failed: "
             f"{first.get('reason', 'unknown')} @ {first.get('path', '')}"
         )
+
+    def _run_codex(
+        self,
+        *,
+        request: CodexRunRequest,
+        progress_callback: Callable[[str], None] | None,
+        cancel_check: Callable[[], bool] | None,
+    ) -> CodexRunResult:
+        run_callable = self.codex_executor.run
+        kwargs: dict[str, Any] = {
+            "progress_callback": progress_callback,
+        }
+        if cancel_check is not None and self._callable_supports_kwarg(run_callable, "cancel_check"):
+            kwargs["cancel_check"] = cancel_check
+        return run_callable(request, **kwargs)
+
+    def _run_check(
+        self,
+        *,
+        project_root: Path,
+        notes_root: Path,
+        output_path: Path,
+        progress_callback: Callable[[str], None] | None,
+        cancel_check: Callable[[], bool] | None,
+    ) -> CheckRunResult:
+        run_callable = self.check_runner.run
+        kwargs: dict[str, Any] = {
+            "project_root": project_root,
+            "notes_root": notes_root,
+            "output_path": output_path,
+            "progress_callback": progress_callback,
+        }
+        if cancel_check is not None and self._callable_supports_kwarg(run_callable, "cancel_check"):
+            kwargs["cancel_check"] = cancel_check
+        return run_callable(**kwargs)
+
+    def _callable_supports_kwarg(self, target: Callable[..., Any], name: str) -> bool:
+        try:
+            signature = inspect.signature(target)
+        except (TypeError, ValueError):
+            return False
+        parameter = signature.parameters.get(name)
+        if parameter is None:
+            return False
+        return parameter.kind in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
+
+    def _probe_codex_cli(self) -> dict[str, Any]:
+        probe = getattr(self.codex_executor, "probe_cli", None)
+        if probe is None or not callable(probe):
+            return {
+                "available": None,
+                "version": "unknown",
+                "error": "当前执行器未实现 codex CLI 预检查接口",
+            }
+        try:
+            payload = probe()
+        except Exception as exc:
+            return {
+                "available": False,
+                "version": "unknown",
+                "error": f"codex CLI 预检查失败: {exc}",
+            }
+        available = payload.get("available")
+        version = str(payload.get("version", "unknown"))
+        error = payload.get("error")
+        return {
+            "available": available if isinstance(available, bool) else None,
+            "version": version,
+            "error": str(error) if error is not None else None,
+        }
+
+    def _ensure_writable_dir(
+        self,
+        path: Path,
+        *,
+        prefer_parent_if_missing: bool = False,
+    ) -> tuple[bool, str]:
+        if path.exists() and not path.is_dir():
+            return (False, f"不是目录: {path}")
+        target = path
+        if not path.exists():
+            if prefer_parent_if_missing:
+                target = path.parent
+            else:
+                return (False, f"目录不存在: {path}")
+        if not target.exists():
+            return (False, f"目录不存在: {target}")
+        if not target.is_dir():
+            return (False, f"不是目录: {target}")
+        probe_file = target / f".notes_agent_write_probe_{uuid.uuid4().hex}"
+        try:
+            probe_file.write_text("probe\n", encoding="utf-8")
+            probe_file.unlink()
+        except OSError as exc:
+            return (False, f"目录不可写: {target} ({exc})")
+        return (True, f"目录可写: {target}")
+
+    def _finalize_preflight_result(
+        self,
+        *,
+        started_at: str,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+        warnings: list[str],
+        context: dict[str, Any],
+        progress_callback: Callable[[str], None] | None,
+    ) -> dict[str, Any]:
+        finished_at = _now_iso()
+        passed = len(errors) == 0
+        payload = {
+            "passed": passed,
+            "errors": errors,
+            "warnings": warnings,
+            "checks": checks,
+            "context": context,
+            "started_at": started_at,
+            "finished_at": finished_at,
+        }
+        self._emit_progress(progress_callback, f"[preflight] 结束 passed={passed}")
+        return payload
 
     def _emit_progress(
         self,

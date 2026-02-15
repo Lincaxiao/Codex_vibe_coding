@@ -68,6 +68,26 @@ class FakeCodexExecutor:
         )
 
 
+class FakeCodexExecutorWithProbe(FakeCodexExecutor):
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        version: str = "codex-cli 0.100.0",
+        error: str | None = None,
+        **kwargs: object,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._probe_payload = {
+            "available": available,
+            "version": version,
+            "error": error,
+        }
+
+    def probe_cli(self) -> dict[str, object]:
+        return dict(self._probe_payload)
+
+
 class RaisingCodexExecutor:
     def run(
         self,
@@ -740,6 +760,63 @@ class WorkflowOrchestratorTests(unittest.TestCase):
                 to_round="round1",
                 workflow_run_id="wf_missing_registry",
             )
+
+    def test_preflight_round0_only_passes_without_lecture_registry(self) -> None:
+        self.lecture_registry_service.remove_lecture(
+            project_root=self.config.project_root,
+            lec_id="LEC01",
+        )
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        payload = orchestrator.preflight(
+            project_root=self.config.project_root,
+            from_round="round0",
+            to_round="round0",
+        )
+        self.assertTrue(payload["passed"])
+        self.assertEqual(payload["errors"], [])
+
+    def test_preflight_round1_fails_when_check_script_missing(self) -> None:
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutor(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        payload = orchestrator.preflight(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+        )
+        self.assertFalse(payload["passed"])
+        self.assertTrue(any("check_script" in item for item in payload["errors"]))
+
+    def test_preflight_round1_passes_after_round0_with_codex_probe(self) -> None:
+        Round0Initializer().initialize(
+            project_root=self.config.project_root,
+            notes_root=self.config.notes_root,
+            course_id=self.config.course_id,
+        )
+        orchestrator = WorkflowOrchestrator(
+            project_service=self.project_service,
+            codex_executor=FakeCodexExecutorWithProbe(default_success=True),  # type: ignore[arg-type]
+            check_runner=FakeCheckRunner(outcomes=[True]),  # type: ignore[arg-type]
+            round0_initializer=Round0Initializer(),
+        )
+        payload = orchestrator.preflight(
+            project_root=self.config.project_root,
+            from_round="round1",
+            to_round="round1",
+            target_lectures=["LEC01"],
+        )
+        self.assertTrue(payload["passed"])
+        self.assertEqual(payload["errors"], [])
+        self.assertEqual(payload["warnings"], [])
+        self.assertIn("round1", payload["context"]["rounds"])
 
 
 if __name__ == "__main__":
