@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { MenuCommand, Prompt, StorageConfig } from "../shared/types";
-import { formatDate, parseTags, parseVariables } from "./utils";
+import { formatDate, formatSensitivePath, parseTags, parseVariables } from "./utils";
 
 type FormState = {
   title: string;
@@ -49,11 +49,13 @@ function initialStorageConfig(): StorageConfig {
     selectedFolder: null,
     dbPath: null,
     source: "unset",
+    warning: null,
   };
 }
 
 export default function App() {
   const searchRef = useRef<HTMLInputElement>(null);
+  const busyCounterRef = useRef(0);
 
   const [status, setStatus] = useState("就绪");
   const [toast, setToast] = useState("");
@@ -93,6 +95,19 @@ export default function App() {
     window.setTimeout(() => setToast(""), 2200);
   }, []);
 
+  const withBusy = useCallback(async <T,>(task: () => Promise<T>): Promise<T> => {
+    busyCounterRef.current += 1;
+    setBusy(true);
+    try {
+      return await task();
+    } finally {
+      busyCounterRef.current = Math.max(0, busyCounterRef.current - 1);
+      if (busyCounterRef.current === 0) {
+        setBusy(false);
+      }
+    }
+  }, []);
+
   const requireStorage = useCallback(() => {
     if (storageConfig.isConfigured) {
       return true;
@@ -115,6 +130,9 @@ export default function App() {
     }
 
     setStorageConfig(result.data);
+    if (result.data.warning) {
+      notify(result.data.warning);
+    }
     if (!result.data.isConfigured) {
       setStorageModalOpen(true);
       setItems([]);
@@ -133,14 +151,14 @@ export default function App() {
       return;
     }
 
-    setBusy(true);
-    const result = await window.vault.prompt.list({
-      query,
-      includeDeleted,
-      limit: 200,
-      offset: 0,
-    });
-    setBusy(false);
+    const result = await withBusy(() =>
+      window.vault.prompt.list({
+        query,
+        includeDeleted,
+        limit: 200,
+        offset: 0,
+      })
+    );
 
     if (!result.ok) {
       notify(result.error.message);
@@ -166,7 +184,7 @@ export default function App() {
     if (!exists) {
       setSelectedId(result.data.items[0].id);
     }
-  }, [includeDeleted, isCreating, notify, query, selectedId, storageConfig.isConfigured]);
+  }, [includeDeleted, isCreating, notify, query, selectedId, storageConfig.isConfigured, withBusy]);
 
   const loadDetail = useCallback(
     async (promptId: string) => {
@@ -174,9 +192,7 @@ export default function App() {
         return;
       }
 
-      setBusy(true);
-      const result = await window.vault.prompt.get(promptId);
-      setBusy(false);
+      const result = await withBusy(() => window.vault.prompt.get(promptId));
 
       if (!result.ok) {
         notify(result.error.message);
@@ -190,7 +206,7 @@ export default function App() {
       });
       setStatus(`已加载 ${result.data.id}`);
     },
-    [notify, storageConfig.isConfigured]
+    [notify, storageConfig.isConfigured, withBusy]
   );
 
   const createNew = useCallback(() => {
@@ -202,9 +218,7 @@ export default function App() {
   }, []);
 
   const chooseStorageFolder = useCallback(async () => {
-    setBusy(true);
-    const result = await window.vault.storage.chooseFolder();
-    setBusy(false);
+    const result = await withBusy(() => window.vault.storage.chooseFolder());
 
     if (!result.ok) {
       notify(result.error.message);
@@ -213,9 +227,9 @@ export default function App() {
 
     setStorageConfig(result.data);
     setStorageModalOpen(false);
-    notify(`存储位置已更新：${result.data.selectedFolder ?? "-"}`);
+    notify(`存储位置已更新：${formatSensitivePath(result.data.selectedFolder)}`);
     await loadList();
-  }, [loadList, notify]);
+  }, [loadList, notify, withBusy]);
 
   const onSubmit = useCallback(async () => {
     if (!requireStorage()) {
@@ -237,10 +251,8 @@ export default function App() {
       return;
     }
 
-    setBusy(true);
     if (isCreating || !selectedId) {
-      const result = await window.vault.prompt.create(payload);
-      setBusy(false);
+      const result = await withBusy(() => window.vault.prompt.create(payload));
       if (!result.ok) {
         notify(result.error.message);
         return;
@@ -252,8 +264,7 @@ export default function App() {
       return;
     }
 
-    const result = await window.vault.prompt.update(selectedId, payload);
-    setBusy(false);
+    const result = await withBusy(() => window.vault.prompt.update(selectedId, payload));
     if (!result.ok) {
       notify(result.error.message);
       return;
@@ -261,7 +272,7 @@ export default function App() {
 
     notify(`已保存 ${result.data.id}`);
     await loadList();
-  }, [form.body, form.tags, form.title, isCreating, loadList, notify, requireStorage, selectedId]);
+  }, [form.body, form.tags, form.title, isCreating, loadList, notify, requireStorage, selectedId, withBusy]);
 
   const onDelete = useCallback(async () => {
     if (!requireStorage()) {
@@ -272,9 +283,7 @@ export default function App() {
       notify("请先选择一条记录");
       return;
     }
-    setBusy(true);
-    const result = await window.vault.prompt.softDelete(selectedId);
-    setBusy(false);
+    const result = await withBusy(() => window.vault.prompt.softDelete(selectedId));
     if (!result.ok) {
       notify(result.error.message);
       return;
@@ -284,7 +293,7 @@ export default function App() {
     setSelectedId(null);
     setRenderOutput("");
     await loadList();
-  }, [isCreating, loadList, notify, requireStorage, selectedId]);
+  }, [isCreating, loadList, notify, requireStorage, selectedId, withBusy]);
 
   const onRender = useCallback(async () => {
     if (!requireStorage()) {
@@ -304,12 +313,12 @@ export default function App() {
       return;
     }
 
-    setBusy(true);
-    const result = await window.vault.prompt.render({
-      promptId: selectedId,
-      variables,
-    });
-    setBusy(false);
+    const result = await withBusy(() =>
+      window.vault.prompt.render({
+        promptId: selectedId,
+        variables,
+      })
+    );
 
     if (!result.ok) {
       notify(result.error.message);
@@ -318,7 +327,7 @@ export default function App() {
 
     setRenderOutput(result.data.content);
     notify("渲染完成");
-  }, [isCreating, notify, renderVars, requireStorage, selectedId]);
+  }, [isCreating, notify, renderVars, requireStorage, selectedId, withBusy]);
 
   const onCopy = useCallback(async () => {
     if (!requireStorage()) {
@@ -338,12 +347,12 @@ export default function App() {
       return;
     }
 
-    setBusy(true);
-    const result = await window.vault.prompt.copyRendered({
-      promptId: selectedId,
-      variables,
-    });
-    setBusy(false);
+    const result = await withBusy(() =>
+      window.vault.prompt.copyRendered({
+        promptId: selectedId,
+        variables,
+      })
+    );
 
     if (!result.ok) {
       notify(result.error.message);
@@ -352,41 +361,42 @@ export default function App() {
 
     setRenderOutput(result.data.content);
     notify("已复制渲染结果");
-  }, [isCreating, notify, renderVars, requireStorage, selectedId]);
+  }, [isCreating, notify, renderVars, requireStorage, selectedId, withBusy]);
 
   const onConfirmImport = useCallback(async () => {
     if (!requireStorage()) {
       return;
     }
 
-    setBusy(true);
-    const result = await window.vault.prompt.importJson();
-    setBusy(false);
+    const result = await withBusy(() => window.vault.prompt.importJson());
     if (!result.ok) {
       notify(result.error.message);
       return;
     }
 
     setImportModalOpen(false);
+    const failureSummary =
+      result.data.failures.length > 0
+        ? `，失败 ${result.data.failures.length} 条`
+        : "";
     notify(
-      `导入完成：新增 ${result.data.added}，跳过 ${result.data.skipped}（${result.data.sourcePath}）`
+      `导入完成：新增 ${result.data.added}，跳过 ${result.data.skipped}${failureSummary}（${formatSensitivePath(result.data.sourcePath)}）`
     );
     await loadList();
-  }, [loadList, notify, requireStorage]);
+  }, [loadList, notify, requireStorage, withBusy]);
 
   const onConfirmExport = useCallback(async () => {
     if (!requireStorage()) {
       return;
     }
 
-    setBusy(true);
-    const result =
+    const result = await withBusy(() =>
       exportFormat === "json"
-        ? await window.vault.prompt.exportJson({ includeDeleted: exportIncludeDeleted })
-        : await window.vault.prompt.exportMarkdown({
+        ? window.vault.prompt.exportJson({ includeDeleted: exportIncludeDeleted })
+        : window.vault.prompt.exportMarkdown({
             includeDeleted: exportIncludeDeleted,
-          });
-    setBusy(false);
+          })
+    );
 
     if (!result.ok) {
       notify(result.error.message);
@@ -394,8 +404,8 @@ export default function App() {
     }
 
     setExportModalOpen(false);
-    notify(`导出完成：${result.data.outputPath}`);
-  }, [exportFormat, exportIncludeDeleted, notify, requireStorage]);
+    notify(`导出完成：${formatSensitivePath(result.data.outputPath)}`);
+  }, [exportFormat, exportIncludeDeleted, notify, requireStorage, withBusy]);
 
   useEffect(() => {
     const run = async () => {
@@ -622,7 +632,7 @@ export default function App() {
         <span>{status}</span>
         <span>
           {storageConfig.isConfigured
-            ? `存储目录：${storageConfig.selectedFolder}`
+            ? `存储目录：${formatSensitivePath(storageConfig.selectedFolder)}`
             : "尚未设置数据存储目录"}
         </span>
       </footer>
@@ -648,7 +658,7 @@ export default function App() {
       >
         <label className="field">
           <span>
-            当前存储目录：{storageConfig.selectedFolder ?? "未设置"}
+            当前存储目录：{formatSensitivePath(storageConfig.selectedFolder)}
           </span>
           <span>选择后，Prompt 数据库会保存在该目录下的 `prompt_vault.sqlite`。</span>
         </label>

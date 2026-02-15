@@ -35,3 +35,20 @@ export function formatDate(iso: string): string {
   }
   return date.toLocaleString();
 }
+
+export function formatSensitivePath(rawPath: string | null): string {
+  if (!rawPath) {
+    return "未设置";
+  }
+
+  const normalized = rawPath.replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length === 0) {
+    return rawPath;
+  }
+  if (parts.length === 1) {
+    return parts[0];
+  }
+
+  return `.../${parts.slice(-2).join("/")}`;
+}

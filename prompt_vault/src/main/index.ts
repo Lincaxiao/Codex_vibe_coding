@@ -4,6 +4,24 @@ import { app, BrowserWindow } from "electron";
 import { closeDb } from "./db";
 import { registerIpcHandlers } from "./ipc";
 import { installAppMenu } from "./menu";
+import { isAllowedDevServerUrl } from "./security";
+
+function resolveDevServerUrl(): string | null {
+  const rawUrl = process.env.PROMPT_VAULT_DEV_SERVER_URL?.trim();
+  if (!rawUrl) {
+    return null;
+  }
+
+  if (app.isPackaged) {
+    return null;
+  }
+
+  if (!isAllowedDevServerUrl(rawUrl)) {
+    throw new Error("PROMPT_VAULT_DEV_SERVER_URL 仅允许 http://127.0.0.1:5173");
+  }
+
+  return rawUrl;
+}
 
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -20,7 +38,7 @@ function createMainWindow(): BrowserWindow {
     },
   });
 
-  const devUrl = process.env.PROMPT_VAULT_DEV_SERVER_URL;
+  const devUrl = resolveDevServerUrl();
   if (devUrl) {
     void window.loadURL(devUrl);
     window.webContents.openDevTools({ mode: "detach" });

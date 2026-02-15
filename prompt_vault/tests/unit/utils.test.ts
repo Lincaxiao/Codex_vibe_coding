@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { parseTags, parseVariables } from "../../src/renderer/utils";
+import { formatSensitivePath, parseTags, parseVariables } from "../../src/renderer/utils";
 
 describe("renderer/utils", () => {
   test("parseTags deduplicates and trims", () => {
@@ -16,5 +16,12 @@ describe("renderer/utils", () => {
 
   test("parseVariables throws on invalid token", () => {
     expect(() => parseVariables("invalid-token")).toThrowError();
+  });
+
+  test("formatSensitivePath masks absolute paths", () => {
+    expect(formatSensitivePath("/Users/alice/Documents/prompt_vault.sqlite")).toBe(
+      ".../Documents/prompt_vault.sqlite"
+    );
+    expect(formatSensitivePath(null)).toBe("未设置");
   });
 });

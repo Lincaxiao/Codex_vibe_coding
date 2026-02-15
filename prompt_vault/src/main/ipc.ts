@@ -1,4 +1,5 @@
 import { clipboard, dialog, ipcMain } from "electron";
+import type { IpcMainInvokeEvent } from "electron";
 
 import type { Result } from "../shared/types";
 import { AppException } from "./appError";
@@ -22,6 +23,7 @@ import {
   softDeletePrompt,
   updatePrompt,
 } from "./promptRepository";
+import { isTrustedSenderUrl } from "./security";
 
 async function safeRun<T>(fn: () => Promise<T> | T): Promise<Result<T>> {
   try {
@@ -29,6 +31,25 @@ async function safeRun<T>(fn: () => Promise<T> | T): Promise<Result<T>> {
   } catch (error) {
     return fail(toAppError(error));
   }
+}
+
+function assertTrustedSender(event: IpcMainInvokeEvent): void {
+  const senderUrl = event.senderFrame?.url ?? "";
+  if (!isTrustedSenderUrl(senderUrl)) {
+    throw new AppException("VALIDATION_ERROR", "非法调用来源");
+  }
+}
+
+function handleTrusted<T>(
+  channel: string,
+  handler: (event: IpcMainInvokeEvent, payload: unknown) => Promise<T> | T
+): void {
+  ipcMain.handle(channel, (event, payload) =>
+    safeRun(() => {
+      assertTrustedSender(event);
+      return handler(event, payload);
+    })
+  );
 }
 
 async function pickImportPath(): Promise<string> {
@@ -82,97 +103,75 @@ export function registerIpcHandlers(): void {
   ipcMain.removeHandler("vault:prompt:exportJson");
   ipcMain.removeHandler("vault:prompt:exportMarkdown");
 
-  ipcMain.handle("vault:health", () => safeRun(() => getHealthPayload()));
+  handleTrusted("vault:health", () => getHealthPayload());
 
-  ipcMain.handle("vault:storage:getConfig", () => safeRun(() => getStorageConfig()));
+  handleTrusted("vault:storage:getConfig", () => getStorageConfig());
 
-  ipcMain.handle("vault:storage:chooseFolder", () =>
-    safeRun(async () => {
+  handleTrusted("vault:storage:chooseFolder", async () => {
       const folderPath = await pickStorageFolder();
       return setStorageFolder(folderPath);
-    })
-  );
+  });
 
-  ipcMain.handle("vault:prompt:list", (_event, input: unknown) =>
-    safeRun(() => {
+  handleTrusted("vault:prompt:list", (_event, input) => {
       const normalized = normalizePromptListInput(input);
       return listPrompts(normalized);
-    })
-  );
+  });
 
-  ipcMain.handle("vault:prompt:get", (_event, promptIdRaw: unknown) =>
-    safeRun(() => {
+  handleTrusted("vault:prompt:get", (_event, promptIdRaw) => {
       const promptId = normalizePromptId(promptIdRaw);
       const prompt = getPrompt(promptId);
       if (!prompt) {
         throw new AppException("NOT_FOUND", "提示词不存在");
       }
       return prompt;
-    })
-  );
+  });
 
-  ipcMain.handle("vault:prompt:create", (_event, inputRaw: unknown) =>
-    safeRun(() => {
+  handleTrusted("vault:prompt:create", (_event, inputRaw) => {
       const input = normalizePromptUpsertInput(inputRaw);
       return createPrompt(input);
-    })
-  );
+  });
 
-  ipcMain.handle("vault:prompt:update", (_event, payloadRaw: unknown) =>
-    safeRun(() => {
+  handleTrusted("vault:prompt:update", (_event, payloadRaw) => {
       const payload = normalizeUpdatePayload(payloadRaw);
       return updatePrompt(payload.promptId, payload.input);
-    })
-  );
+  });
 
-  ipcMain.handle("vault:prompt:softDelete", (_event, promptIdRaw: unknown) =>
-    safeRun(() => {
+  handleTrusted("vault:prompt:softDelete", (_event, promptIdRaw) => {
       const promptId = normalizePromptId(promptIdRaw);
       const deleted = softDeletePrompt(promptId);
       if (!deleted) {
         throw new AppException("NOT_FOUND", "提示词不存在");
       }
       return { deleted: true as const };
-    })
-  );
+  });
 
-  ipcMain.handle("vault:prompt:render", (_event, inputRaw: unknown) =>
-    safeRun(() => {
+  handleTrusted("vault:prompt:render", (_event, inputRaw) => {
       const input = normalizePromptRenderInput(inputRaw);
       const content = renderPrompt(input.promptId, input.variables);
       return { content };
-    })
-  );
+  });
 
-  ipcMain.handle("vault:prompt:copyRendered", (_event, inputRaw: unknown) =>
-    safeRun(() => {
+  handleTrusted("vault:prompt:copyRendered", (_event, inputRaw) => {
       const input = normalizePromptRenderInput(inputRaw);
       const content = renderPrompt(input.promptId, input.variables);
       clipboard.writeText(content);
       return { copied: true as const, content };
-    })
-  );
+  });
 
-  ipcMain.handle("vault:prompt:importJson", () =>
-    safeRun(async () => {
+  handleTrusted("vault:prompt:importJson", async () => {
       const inputPath = await pickImportPath();
       return importFromJson(inputPath);
-    })
-  );
+  });
 
-  ipcMain.handle("vault:prompt:exportJson", (_event, payloadRaw: unknown) =>
-    safeRun(async () => {
+  handleTrusted("vault:prompt:exportJson", async (_event, payloadRaw) => {
       const { includeDeleted } = normalizeIncludeDeletedPayload(payloadRaw);
       const outputPath = await pickExportPath("json");
       return exportToJson(outputPath, includeDeleted);
-    })
-  );
+  });
 
-  ipcMain.handle("vault:prompt:exportMarkdown", (_event, payloadRaw: unknown) =>
-    safeRun(async () => {
+  handleTrusted("vault:prompt:exportMarkdown", async (_event, payloadRaw) => {
       const { includeDeleted } = normalizeIncludeDeletedPayload(payloadRaw);
       const outputPath = await pickExportPath("markdown");
       return exportToMarkdown(outputPath, includeDeleted);
-    })
-  );
+  });
 }

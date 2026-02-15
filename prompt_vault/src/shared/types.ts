@@ -29,7 +29,8 @@ export type StorageConfig = {
   isConfigured: boolean;
   selectedFolder: string | null;
   dbPath: string | null;
-  source: "env" | "user_selected" | "unset";
+  source: "env" | "user_selected" | "unset" | "corrupted";
+  warning: string | null;
 };
 
 export type Prompt = {
@@ -78,10 +79,16 @@ export type PromptCopyOutput = {
   content: string;
 };
 
+export type ImportFailure = {
+  index: number;
+  reason: string;
+};
+
 export type ImportJsonOutput = {
   added: number;
   skipped: number;
   sourcePath: string;
+  failures: ImportFailure[];
 };
 
 export type ExportJsonInput = {

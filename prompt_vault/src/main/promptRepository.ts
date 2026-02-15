@@ -147,6 +147,18 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function isFtsSyntaxError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes("fts5") && message.includes("syntax");
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
+
 function listFromRows(
   whereClause: string,
   params: Array<string | number>,
@@ -201,7 +213,35 @@ export function listPrompts(input: ListPromptInput): ListPromptOutput {
   }
 
   const whereClause = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
-  return listFromRows(whereClause, params, { limit, offset });
+  try {
+    return listFromRows(whereClause, params, { limit, offset });
+  } catch (error) {
+    if (!query || !isFtsSyntaxError(error)) {
+      throw error;
+    }
+  }
+
+  const like = `%${escapeLike(query)}%`;
+  const fallbackWhereParts: string[] = [];
+  const fallbackParams: Array<string | number> = [];
+
+  if (!input.includeDeleted) {
+    fallbackWhereParts.push("p.is_deleted = 0");
+  }
+
+  fallbackWhereParts.push(
+    "(" +
+      "p.title LIKE ? ESCAPE '\\' COLLATE NOCASE " +
+      "OR p.body LIKE ? ESCAPE '\\' COLLATE NOCASE " +
+      "OR EXISTS (" +
+      "SELECT 1 FROM prompt_tags t WHERE t.prompt_id = p.id AND t.tag LIKE ? ESCAPE '\\' COLLATE NOCASE" +
+      ")" +
+      ")"
+  );
+  fallbackParams.push(like, like, like);
+
+  const fallbackWhereClause = `WHERE ${fallbackWhereParts.join(" AND ")}`;
+  return listFromRows(fallbackWhereClause, fallbackParams, { limit, offset });
 }
 
 export function listAllPrompts(includeDeleted: boolean): PromptRecord[] {

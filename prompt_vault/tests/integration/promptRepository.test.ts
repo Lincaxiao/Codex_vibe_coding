@@ -75,6 +75,20 @@ describe("promptRepository integration", () => {
     expect(hits.items[0]?.title).toBe("Prompt A");
   });
 
+  test("FTS syntax error query falls back to LIKE search", () => {
+    prepareDb("search_fallback");
+
+    createPrompt({
+      title: "Parenthesis",
+      body: "this line has (brackets)",
+      tags: ["text"],
+    });
+
+    const hits = listPrompts({ query: "(", includeDeleted: true, limit: 20, offset: 0 });
+    expect(hits.total).toBe(1);
+    expect(hits.items[0]?.title).toBe("Parenthesis");
+  });
+
   test("renderPrompt replaces variables", () => {
     prepareDb("render");
 
@@ -101,6 +115,32 @@ describe("promptRepository integration", () => {
     prepareDb("import_target");
     const result = await importFromJson(jsonPath);
     expect(result.added).toBe(2);
+    expect(listAllPrompts(true)).toHaveLength(2);
+  });
+
+  test("import returns failure details for invalid and duplicate rows", async () => {
+    prepareDb("import_failures");
+    createPrompt({ title: "Dup", body: "Body Dup", tags: [] });
+
+    const jsonPath = path.join(workspace, "bad-import.json");
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify(
+        [
+          { title: "Dup", body: "Body Dup", tags: [] },
+          { title: "", body: "Body Empty Title", tags: [] },
+          { title: "Valid", body: "Body Valid", tags: ["ok"] },
+        ],
+        null,
+        2
+      ),
+      "utf-8"
+    );
+
+    const result = await importFromJson(jsonPath);
+    expect(result.added).toBe(1);
+    expect(result.skipped).toBe(2);
+    expect(result.failures).toHaveLength(2);
     expect(listAllPrompts(true)).toHaveLength(2);
   });
 });

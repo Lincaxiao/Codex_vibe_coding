@@ -4,8 +4,9 @@ import path from "node:path";
 import Database from "better-sqlite3";
 
 import { AppException } from "./appError";
+import { toPathLabel } from "./pathMask";
 import { applySchema } from "./schema";
-import { readStorageDirectory, saveStorageDirectory } from "./storageSettings";
+import { readStorageDirectoryState, saveStorageDirectory } from "./storageSettings";
 
 let dbInstance: Database.Database | null = null;
 
@@ -13,7 +14,8 @@ export type StorageConfig = {
   isConfigured: boolean;
   selectedFolder: string | null;
   dbPath: string | null;
-  source: "env" | "user_selected" | "unset";
+  source: "env" | "user_selected" | "unset" | "corrupted";
+  warning: string | null;
 };
 
 function resolveEnvDbPath(): string | null {
@@ -30,9 +32,13 @@ function resolveDbPath(): string {
     return envDbPath;
   }
 
-  const selectedFolder = readStorageDirectory();
-  if (selectedFolder) {
-    return path.join(selectedFolder, "prompt_vault.sqlite");
+  const storage = readStorageDirectoryState();
+  if (storage.directory) {
+    return path.join(storage.directory, "prompt_vault.sqlite");
+  }
+
+  if (storage.corrupted) {
+    throw new AppException("VALIDATION_ERROR", "存储配置损坏，请重新选择数据存储文件夹");
   }
 
   throw new AppException("VALIDATION_ERROR", "请先在“存储位置”里选择数据存储文件夹");
@@ -43,27 +49,40 @@ export function getStorageConfig(): StorageConfig {
   if (envDbPath) {
     return {
       isConfigured: true,
-      selectedFolder: path.dirname(envDbPath),
-      dbPath: envDbPath,
+      selectedFolder: toPathLabel(path.dirname(envDbPath)),
+      dbPath: toPathLabel(envDbPath),
       source: "env",
+      warning: null,
     };
   }
 
-  const selectedFolder = readStorageDirectory();
-  if (!selectedFolder) {
+  const storage = readStorageDirectoryState();
+  if (!storage.directory) {
+    if (storage.corrupted) {
+      return {
+        isConfigured: false,
+        selectedFolder: null,
+        dbPath: null,
+        source: "corrupted",
+        warning: "存储配置文件已损坏，请重新选择数据存储文件夹",
+      };
+    }
+
     return {
       isConfigured: false,
       selectedFolder: null,
       dbPath: null,
       source: "unset",
+      warning: null,
     };
   }
 
   return {
     isConfigured: true,
-    selectedFolder,
-    dbPath: path.join(selectedFolder, "prompt_vault.sqlite"),
+    selectedFolder: toPathLabel(storage.directory),
+    dbPath: "prompt_vault.sqlite",
     source: "user_selected",
+    warning: null,
   };
 }
 
@@ -77,9 +96,10 @@ export function setStorageFolder(folderPath: string): StorageConfig {
 
   return {
     isConfigured: true,
-    selectedFolder,
-    dbPath: path.join(selectedFolder, "prompt_vault.sqlite"),
+    selectedFolder: toPathLabel(selectedFolder),
+    dbPath: "prompt_vault.sqlite",
     source: "user_selected",
+    warning: null,
   };
 }
 
