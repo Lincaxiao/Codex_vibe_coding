@@ -1,5 +1,7 @@
+import json
 from pathlib import Path
 
+from src.constants import DEFAULT_CHANNELS, DEFAULT_SAMPLE_RATE
 from src.models import AppConfig
 from src.services.config_service import ConfigService
 
@@ -42,3 +44,27 @@ def test_invalid_workspace_returns_none(tmp_path: Path) -> None:
 
     workspace.rmdir()
     assert service.load() is None
+
+
+def test_load_invalid_numeric_fields_uses_defaults(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    service = ConfigService(project_root=tmp_path)
+    service.state_dir.mkdir(parents=True, exist_ok=True)
+    service.config_path.write_text(
+        json.dumps(
+            {
+                "workspace_dir": str(workspace),
+                "sample_rate": "invalid",
+                "channels": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = service.load()
+
+    assert loaded is not None
+    assert loaded.sample_rate == DEFAULT_SAMPLE_RATE
+    assert loaded.channels == DEFAULT_CHANNELS

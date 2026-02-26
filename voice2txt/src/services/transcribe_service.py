@@ -25,7 +25,7 @@ class TranscribeService:
         self.default_model_name = default_model_name
         self.default_language = default_language
         self._transcribe_callable: Callable | None = None
-        self._model_path: str | None = None
+        self._model_path_by_workspace: dict[str, str] = {}
 
     def transcribe(self, request: TranscribeRequest) -> TranscribeResult:
         workspace_dir = Path(request.workspace_dir).expanduser().resolve()
@@ -34,7 +34,7 @@ class TranscribeService:
         model_name = self.default_model_name
         language = request.language or self.default_language
         transcribe_callable = self._get_transcribe_callable()
-        model_path = self._resolve_model_path()
+        model_path = self._resolve_model_path(workspace_dir=workspace_dir)
 
         start = time.perf_counter()
         try:
@@ -46,7 +46,7 @@ class TranscribeService:
             )
         except Exception as exc:
             if self._is_weight_loading_error(str(exc)):
-                refreshed_path = self._resolve_model_path(force_download=True)
+                refreshed_path = self._resolve_model_path(workspace_dir=workspace_dir, force_download=True)
                 try:
                     raw_result = self._run_transcribe_once(
                         transcribe_callable=transcribe_callable,
@@ -87,9 +87,11 @@ class TranscribeService:
         lowered = message.lower()
         return "load_npz" in lowered or "safetensors" in lowered
 
-    def _resolve_model_path(self, force_download: bool = False) -> str:
-        if not force_download and self._model_path and Path(self._model_path).exists():
-            return self._model_path
+    def _resolve_model_path(self, workspace_dir: Path, force_download: bool = False) -> str:
+        workspace_key = str(workspace_dir.expanduser().resolve())
+        cached_model_path = self._model_path_by_workspace.get(workspace_key)
+        if not force_download and cached_model_path and Path(cached_model_path).exists():
+            return cached_model_path
 
         try:
             model_dir = Path(
@@ -104,8 +106,9 @@ class TranscribeService:
             raise TranscribeError(f"Failed to download model '{DEFAULT_MODEL_REPO}': {exc}") from exc
 
         self._ensure_compatible_weights(model_dir)
-        self._model_path = str(model_dir)
-        return self._model_path
+        resolved_model_path = str(model_dir)
+        self._model_path_by_workspace[workspace_key] = resolved_model_path
+        return resolved_model_path
 
     @staticmethod
     def _ensure_compatible_weights(model_dir: Path) -> None:

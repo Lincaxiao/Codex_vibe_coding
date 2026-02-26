@@ -1,4 +1,5 @@
 from pathlib import Path
+from threading import Lock
 from typing import List
 
 import numpy as np
@@ -18,9 +19,103 @@ class AudioService:
         self._stream = None
         self._frames: List[np.ndarray] = []
         self._last_status = ""
+        self._level_lock = Lock()
+        self._latest_rms = 0.0
+        self._latest_peak = 0.0
 
     def set_input_device(self, device_index: int | None) -> None:
         self.input_device_index = device_index
+
+    def validate_input_device(self) -> tuple[bool, str]:
+        try:
+            import sounddevice as sd
+        except Exception as exc:  # pragma: no cover
+            return False, f"sounddevice is not available: {exc}"
+
+        selected_device = self.input_device_index
+        if selected_device is None:
+            selected_device = self.get_default_input_device()
+            if selected_device is None:
+                return False, "未检测到系统默认输入设备。"
+
+        try:
+            info = sd.query_devices(selected_device)
+        except Exception as exc:
+            return False, f"无法访问输入设备 {selected_device}: {exc}"
+
+        max_input_channels = int(info.get("max_input_channels", 0))
+        if max_input_channels <= 0:
+            return False, f"设备 {selected_device} 不支持录音输入。"
+
+        return True, "设备可用。"
+
+    def ensure_input_device_available(self) -> tuple[bool, str, bool]:
+        """Ensure a usable input device is selected.
+
+        Returns:
+            (is_ready, detail, switched)
+            switched=True means input_device_index was adjusted for recovery.
+        """
+        try:
+            import sounddevice as sd
+        except Exception as exc:  # pragma: no cover
+            return False, f"sounddevice is not available: {exc}", False
+
+        try:
+            devices = sd.query_devices()
+        except Exception as exc:
+            return False, f"无法读取输入设备列表：{exc}", False
+
+        input_indices: list[int] = []
+        for index, device in enumerate(devices):
+            if int(device.get("max_input_channels", 0)) > 0:
+                input_indices.append(index)
+
+        if not input_indices:
+            return False, "当前没有可用的录音输入设备。", False
+
+        selected_device = self.input_device_index
+        if selected_device is not None:
+            is_ok, detail = self._is_device_usable(sd, selected_device)
+            if is_ok:
+                return True, "设备可用。", False
+
+            default_device = self.get_default_input_device()
+            if default_device is not None:
+                default_ok, _ = self._is_device_usable(sd, default_device)
+                if default_ok:
+                    self.input_device_index = None
+                    return (
+                        True,
+                        f"{detail} 已自动切换为系统默认设备。",
+                        True,
+                    )
+
+            fallback_index = input_indices[0]
+            self.input_device_index = fallback_index
+            return (
+                True,
+                f"{detail} 已自动切换到可用设备索引 {fallback_index}。",
+                True,
+            )
+
+        default_device = self.get_default_input_device()
+        if default_device is not None:
+            default_ok, default_detail = self._is_device_usable(sd, default_device)
+            if default_ok:
+                return True, "设备可用。", False
+
+            fallback_index = input_indices[0]
+            self.input_device_index = fallback_index
+            return (
+                True,
+                f"{default_detail} 已自动切换到可用设备索引 {fallback_index}。",
+                True,
+            )
+
+        fallback_index = input_indices[0]
+        self.input_device_index = fallback_index
+        return True, f"未检测到系统默认输入设备，已自动切换到设备索引 {fallback_index}。", True
 
     def list_input_devices(self) -> list[tuple[int, str]]:
         try:
@@ -70,11 +165,21 @@ class AudioService:
 
         self._frames = []
         self._last_status = ""
+        self._set_levels(0.0, 0.0)
 
         def _callback(indata, _frames, _time, status) -> None:
             if status:
                 self._last_status = str(status)
-            self._frames.append(indata.copy())
+            frame = indata.copy()
+            self._frames.append(frame)
+            if frame.size == 0:
+                self._set_levels(0.0, 0.0)
+                return
+            # Capture lightweight live level metrics for UI polling.
+            abs_frame = np.abs(frame)
+            peak = float(abs_frame.max())
+            rms = float(np.sqrt(np.mean(frame * frame)))
+            self._set_levels(rms=rms, peak=peak)
 
         try:
             self._stream = sd.InputStream(
@@ -88,6 +193,7 @@ class AudioService:
         except Exception as exc:
             self._stream = None
             self._frames = []
+            self._set_levels(0.0, 0.0)
             selected = (
                 "系统默认设备"
                 if self.input_device_index is None
@@ -115,6 +221,7 @@ class AudioService:
 
         audio_data = np.concatenate(self._frames, axis=0)
         self._frames = []
+        self._set_levels(0.0, 0.0)
 
         output_wav_path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -135,3 +242,25 @@ class AudioService:
         finally:
             self._stream = None
             self._frames = []
+            self._set_levels(0.0, 0.0)
+
+    def get_live_levels(self) -> tuple[float, float]:
+        with self._level_lock:
+            return self._latest_rms, self._latest_peak
+
+    def _set_levels(self, rms: float, peak: float) -> None:
+        with self._level_lock:
+            self._latest_rms = max(0.0, rms)
+            self._latest_peak = max(0.0, peak)
+
+    @staticmethod
+    def _is_device_usable(sd, device_index: int) -> tuple[bool, str]:
+        try:
+            info = sd.query_devices(device_index)
+        except Exception as exc:
+            return False, f"无法访问输入设备 {device_index}: {exc}"
+
+        max_input_channels = int(info.get("max_input_channels", 0))
+        if max_input_channels <= 0:
+            return False, f"设备 {device_index} 不支持录音输入。"
+        return True, "设备可用。"

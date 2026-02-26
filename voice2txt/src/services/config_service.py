@@ -33,8 +33,8 @@ class ConfigService:
         return AppConfig(
             workspace_dir=str(workspace.resolve()),
             model_name=str(raw.get("model_name", DEFAULT_MODEL_NAME)),
-            sample_rate=int(raw.get("sample_rate", DEFAULT_SAMPLE_RATE)),
-            channels=int(raw.get("channels", DEFAULT_CHANNELS)),
+            sample_rate=self._parse_positive_int(raw.get("sample_rate"), DEFAULT_SAMPLE_RATE),
+            channels=self._parse_positive_int(raw.get("channels"), DEFAULT_CHANNELS),
             input_device_index=self._parse_optional_int(raw.get("input_device_index")),
         )
 
@@ -92,3 +92,13 @@ class ConfigService:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _parse_positive_int(value, fallback: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return fallback
+        if parsed <= 0:
+            return fallback
+        return parsed

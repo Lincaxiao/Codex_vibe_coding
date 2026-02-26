@@ -23,7 +23,11 @@ def test_transcribe_success_sets_env_and_returns_text(monkeypatch, tmp_path: Pat
 
     service = TranscribeService()
     monkeypatch.setattr(service, "_get_transcribe_callable", lambda: fake_transcribe)
-    monkeypatch.setattr(service, "_resolve_model_path", lambda: "/mock/model/path")
+    monkeypatch.setattr(
+        service,
+        "_resolve_model_path",
+        lambda workspace_dir, force_download=False: "/mock/model/path",
+    )
 
     result = service.transcribe(
         TranscribeRequest(
@@ -53,7 +57,11 @@ def test_transcribe_failure_raises(monkeypatch, tmp_path: Path) -> None:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(service, "_get_transcribe_callable", lambda: fake_transcribe)
-    monkeypatch.setattr(service, "_resolve_model_path", lambda: "/mock/model/path")
+    monkeypatch.setattr(
+        service,
+        "_resolve_model_path",
+        lambda workspace_dir, force_download=False: "/mock/model/path",
+    )
 
     with pytest.raises(TranscribeError):
         service.transcribe(
@@ -91,7 +99,11 @@ def test_request_model_name_is_ignored_and_uses_single_model(monkeypatch, tmp_pa
 
     service = TranscribeService()
     monkeypatch.setattr(service, "_get_transcribe_callable", lambda: fake_transcribe)
-    monkeypatch.setattr(service, "_resolve_model_path", lambda: "/mock/model/path")
+    monkeypatch.setattr(
+        service,
+        "_resolve_model_path",
+        lambda workspace_dir, force_download=False: "/mock/model/path",
+    )
 
     result = service.transcribe(
         TranscribeRequest(
@@ -107,10 +119,12 @@ def test_request_model_name_is_ignored_and_uses_single_model(monkeypatch, tmp_pa
     assert captured["repo"] == "/mock/model/path"
 
 
-def test_resolve_model_path_downloads_once(monkeypatch, tmp_path: Path) -> None:
+def test_resolve_model_path_downloads_once_for_same_workspace(monkeypatch, tmp_path: Path) -> None:
     model_dir = tmp_path / "repo"
     model_dir.mkdir(parents=True, exist_ok=True)
     (model_dir / "model.safetensors").write_bytes(b"fake")
+    workspace = tmp_path / "workspace_a"
+    workspace.mkdir(parents=True, exist_ok=True)
 
     calls = {"count": 0}
 
@@ -121,12 +135,38 @@ def test_resolve_model_path_downloads_once(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("src.services.transcribe_service.snapshot_download", fake_snapshot_download)
 
     service = TranscribeService()
-    first = service._resolve_model_path()
-    second = service._resolve_model_path()
+    first = service._resolve_model_path(workspace)
+    second = service._resolve_model_path(workspace)
 
     assert first == str(model_dir)
     assert second == str(model_dir)
     assert calls["count"] == 1
+
+
+def test_resolve_model_path_separates_workspace_cache(monkeypatch, tmp_path: Path) -> None:
+    model_dir = tmp_path / "repo"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "model.safetensors").write_bytes(b"fake")
+    workspace_a = tmp_path / "workspace_a"
+    workspace_b = tmp_path / "workspace_b"
+    workspace_a.mkdir(parents=True, exist_ok=True)
+    workspace_b.mkdir(parents=True, exist_ok=True)
+
+    calls = {"count": 0}
+
+    def fake_snapshot_download(*_args, **_kwargs):
+        calls["count"] += 1
+        return str(model_dir)
+
+    monkeypatch.setattr("src.services.transcribe_service.snapshot_download", fake_snapshot_download)
+
+    service = TranscribeService()
+    first = service._resolve_model_path(workspace_a)
+    second = service._resolve_model_path(workspace_b)
+
+    assert first == str(model_dir)
+    assert second == str(model_dir)
+    assert calls["count"] == 2
 
 
 def test_transcribe_retries_after_weight_loading_error(monkeypatch, tmp_path: Path) -> None:
@@ -137,8 +177,8 @@ def test_transcribe_retries_after_weight_loading_error(monkeypatch, tmp_path: Pa
 
     path_calls = []
 
-    def fake_resolve_model_path(force_download: bool = False):
-        path_calls.append(force_download)
+    def fake_resolve_model_path(workspace_dir, force_download: bool = False):
+        path_calls.append((str(workspace_dir), force_download))
         return "/mock/model/path"
 
     attempt = {"n": 0}
@@ -163,4 +203,6 @@ def test_transcribe_retries_after_weight_loading_error(monkeypatch, tmp_path: Pa
     )
 
     assert result.text == "ok"
-    assert path_calls == [False, True]
+    assert len(path_calls) == 2
+    assert path_calls[0][1] is False
+    assert path_calls[1][1] is True

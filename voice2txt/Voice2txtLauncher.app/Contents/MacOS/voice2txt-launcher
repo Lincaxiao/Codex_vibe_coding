@@ -1,0 +1,26 @@
+#!/bin/zsh
+set -euo pipefail
+
+PROJECT_DIR="/Users/smilechen/Documents/Codex_vibe_coding/voice2txt"
+ENV_PREFIX="$PROJECT_DIR/.conda"
+APP_ENTRY="$PROJECT_DIR/main.py"
+LOG_FILE="/tmp/voice2txt_launcher.log"
+CONDA_BIN="${CONDA_EXE:-/opt/miniconda3/bin/conda}"
+
+unset PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONEXECUTABLE __PYVENV_LAUNCHER__
+export PATH="/opt/miniconda3/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export LANG="en_US.UTF-8"
+export LC_ALL="en_US.UTF-8"
+
+{
+  echo ""
+  echo "==== $(date '+%Y-%m-%d %H:%M:%S') ===="
+  echo "launching Voice2txt from $PROJECT_DIR"
+} >>"$LOG_FILE" 2>&1
+
+cd "$PROJECT_DIR"
+if [[ -x "$CONDA_BIN" ]]; then
+  exec "$CONDA_BIN" run -p "$ENV_PREFIX" python "$APP_ENTRY" >>"$LOG_FILE" 2>&1
+fi
+
+exec "$ENV_PREFIX/bin/python" "$APP_ENTRY" >>"$LOG_FILE" 2>&1
