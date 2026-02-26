@@ -1,3 +1,5 @@
+"""清理服务：扫描和删除孤立的 WAV 缓存文件。"""
+
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,13 +30,13 @@ class CleanupService:
 
         return orphan_wavs
 
-    def cleanup_orphan_wavs(self, workspace_dir: Path) -> CleanupResult:
-        orphan_wavs = self.find_orphan_wavs(workspace_dir)
+    def delete_wavs(self, wav_paths: list[Path]) -> CleanupResult:
+        """直接删除给定的 WAV 列表，避免重复扫描（TOCTOU 安全）。"""
         reclaimed_bytes = 0
         deleted_count = 0
         failed_paths: list[Path] = []
 
-        for wav_path in orphan_wavs:
+        for wav_path in wav_paths:
             try:
                 file_size = wav_path.stat().st_size
             except OSError:
@@ -48,11 +50,16 @@ class CleanupService:
             reclaimed_bytes += file_size
 
         return CleanupResult(
-            orphan_count=len(orphan_wavs),
+            orphan_count=len(wav_paths),
             deleted_count=deleted_count,
             reclaimed_bytes=reclaimed_bytes,
             failed_paths=failed_paths,
         )
+
+    def cleanup_orphan_wavs(self, workspace_dir: Path) -> CleanupResult:
+        """扫描并删除孤立 WAV（保留向后兼容）。"""
+        orphan_wavs = self.find_orphan_wavs(workspace_dir)
+        return self.delete_wavs(orphan_wavs)
 
     @staticmethod
     def _validate_workspace(workspace_dir: Path) -> Path:

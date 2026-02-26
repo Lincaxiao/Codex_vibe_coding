@@ -28,6 +28,7 @@ class TranscribeService:
         self._model_path_by_workspace: dict[str, str] = {}
 
     def transcribe(self, request: TranscribeRequest) -> TranscribeResult:
+        """执行转写。request.model_name 被忽略，始终使用 DEFAULT_MODEL_NAME。"""
         workspace_dir = Path(request.workspace_dir).expanduser().resolve()
         self._configure_cache(workspace_dir)
 

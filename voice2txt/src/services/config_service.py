@@ -1,7 +1,8 @@
+"""配置服务：加载/保存应用配置到 JSON 文件。"""
+
 import json
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 from src.constants import DEFAULT_CHANNELS, DEFAULT_MODEL_NAME, DEFAULT_SAMPLE_RATE
 from src.models import AppConfig
@@ -13,7 +14,7 @@ class ConfigService:
         self.config_path = project_root / "state" / "app_config.json"
         self.state_dir = self.config_path.parent
 
-    def load(self) -> Optional[AppConfig]:
+    def load(self) -> AppConfig | None:
         if not self.config_path.exists():
             return None
 

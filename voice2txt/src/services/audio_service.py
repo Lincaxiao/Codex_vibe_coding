@@ -1,9 +1,23 @@
+"""音频录制服务：管理麦克风输入、录音和电平监测。"""
+
 from pathlib import Path
 from threading import Lock
-from typing import List
 
 import numpy as np
 import soundfile as sf
+
+
+def _get_sd():
+    """懒导入 sounddevice（Python 的 sys.modules 缓存保证效率）。"""
+    import sys
+    sd = sys.modules.get("sounddevice")
+    if sd is not None:
+        return sd
+    try:
+        import sounddevice as sd
+        return sd
+    except Exception as exc:
+        raise AudioServiceError("sounddevice is not available in this environment.") from exc
 
 
 class AudioServiceError(Exception):
@@ -17,7 +31,7 @@ class AudioService:
         self.dtype = dtype
         self.input_device_index: int | None = None
         self._stream = None
-        self._frames: List[np.ndarray] = []
+        self._frames: list[np.ndarray] = []
         self._last_status = ""
         self._level_lock = Lock()
         self._latest_rms = 0.0
@@ -28,9 +42,9 @@ class AudioService:
 
     def validate_input_device(self) -> tuple[bool, str]:
         try:
-            import sounddevice as sd
-        except Exception as exc:  # pragma: no cover
-            return False, f"sounddevice is not available: {exc}"
+            sd = _get_sd()
+        except AudioServiceError as exc:
+            return False, str(exc)
 
         selected_device = self.input_device_index
         if selected_device is None:
@@ -50,16 +64,16 @@ class AudioService:
         return True, "设备可用。"
 
     def ensure_input_device_available(self) -> tuple[bool, str, bool]:
-        """Ensure a usable input device is selected.
+        """确保有可用的输入设备。
 
         Returns:
             (is_ready, detail, switched)
-            switched=True means input_device_index was adjusted for recovery.
+            switched=True 表示 input_device_index 被自动调整过。
         """
         try:
-            import sounddevice as sd
-        except Exception as exc:  # pragma: no cover
-            return False, f"sounddevice is not available: {exc}", False
+            sd = _get_sd()
+        except AudioServiceError as exc:
+            return False, str(exc), False
 
         try:
             devices = sd.query_devices()
@@ -85,19 +99,11 @@ class AudioService:
                 default_ok, _ = self._is_device_usable(sd, default_device)
                 if default_ok:
                     self.input_device_index = None
-                    return (
-                        True,
-                        f"{detail} 已自动切换为系统默认设备。",
-                        True,
-                    )
+                    return True, f"{detail} 已自动切换为系统默认设备。", True
 
             fallback_index = input_indices[0]
             self.input_device_index = fallback_index
-            return (
-                True,
-                f"{detail} 已自动切换到可用设备索引 {fallback_index}。",
-                True,
-            )
+            return True, f"{detail} 已自动切换到可用设备索引 {fallback_index}。", True
 
         default_device = self.get_default_input_device()
         if default_device is not None:
@@ -107,22 +113,14 @@ class AudioService:
 
             fallback_index = input_indices[0]
             self.input_device_index = fallback_index
-            return (
-                True,
-                f"{default_detail} 已自动切换到可用设备索引 {fallback_index}。",
-                True,
-            )
+            return True, f"{default_detail} 已自动切换到可用设备索引 {fallback_index}。", True
 
         fallback_index = input_indices[0]
         self.input_device_index = fallback_index
         return True, f"未检测到系统默认输入设备，已自动切换到设备索引 {fallback_index}。", True
 
     def list_input_devices(self) -> list[tuple[int, str]]:
-        try:
-            import sounddevice as sd
-        except Exception as exc:  # pragma: no cover
-            raise AudioServiceError("sounddevice is not available in this environment.") from exc
-
+        sd = _get_sd()
         devices = sd.query_devices()
         result: list[tuple[int, str]] = []
         for index, device in enumerate(devices):
@@ -134,8 +132,8 @@ class AudioService:
 
     def get_default_input_device(self) -> int | None:
         try:
-            import sounddevice as sd
-        except Exception:
+            sd = _get_sd()
+        except AudioServiceError:
             return None
 
         default_value = sd.default.device
@@ -158,10 +156,7 @@ class AudioService:
         if self._stream is not None:
             raise AudioServiceError("Recording is already in progress.")
 
-        try:
-            import sounddevice as sd
-        except Exception as exc:  # pragma: no cover
-            raise AudioServiceError("sounddevice is not available in this environment.") from exc
+        sd = _get_sd()
 
         self._frames = []
         self._last_status = ""
@@ -175,7 +170,6 @@ class AudioService:
             if frame.size == 0:
                 self._set_levels(0.0, 0.0)
                 return
-            # Capture lightweight live level metrics for UI polling.
             abs_frame = np.abs(frame)
             peak = float(abs_frame.max())
             rms = float(np.sqrt(np.mean(frame * frame)))
@@ -200,7 +194,8 @@ class AudioService:
                 else f"设备索引 {self.input_device_index}"
             )
             raise AudioServiceError(
-                f"Unable to start recording with {selected}. Check microphone permissions and input device settings."
+                f"Unable to start recording with {selected}. "
+                "Check microphone permissions and input device settings."
             ) from exc
 
     def stop_and_save(self, output_wav_path: Path) -> Path:

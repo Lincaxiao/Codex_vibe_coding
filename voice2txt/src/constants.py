@@ -12,10 +12,6 @@ DEFAULT_LANGUAGE = "en"
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_CHANNELS = 1
 
-MODEL_REPO_MAP = {
-    "large-v3-fp16": DEFAULT_MODEL_REPO,
-}
-
 SUPPORTED_IMPORT_SUFFIXES = {".wav", ".mp3", ".m4a", ".flac"}
 
 MODEL_CACHE_DIRNAME = ".model_cache"
